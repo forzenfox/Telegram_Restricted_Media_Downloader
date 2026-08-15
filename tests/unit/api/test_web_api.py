@@ -7,26 +7,25 @@ Mock TokenManager、TaskManager 等核心模块。
 
 import os
 import tempfile
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from module.api.app import create_app
 from module.api.dependencies import get_identifier_service
 from module.core.auth.token_manager import TokenManager
-from module.core.task.manager import TaskManager, TaskType
 from module.core.config_manager import ConfigManager
 from module.core.identifier_service import (
-    IdentifierService,
-    ResolvedChat,
-    InvalidIdentifierError,
-    UserNotFoundError,
     AccessDeniedError,
+    IdentifierService,
+    InvalidIdentifierError,
     RateLimitedError,
+    ResolvedChat,
+    UserNotFoundError,
 )
-
+from module.core.task.manager import TaskManager, TaskType
 
 # ==================== 测试工具 ====================
 
@@ -557,9 +556,9 @@ class TestTaskEndpoints:
         await task_manager.start_task(task.task_id)
         await task_manager.fail_task(task.task_id, reason="测试失败")
 
-        # 注入 mock executor
+        # 注入 mock executor 到 TaskManager（新调度契约：由 TaskManager 统一触发执行）
         mock_executor = MagicMock()
-        app.state.task_executor = mock_executor
+        task_manager.set_executor(mock_executor)
 
         # 重试
         resp = await ac.post(f"/api/tasks/{task.task_id}/retry")
@@ -571,11 +570,11 @@ class TestTaskEndpoints:
             f"重试后任务应自动启动，状态应为 running/queued，实际为 {data['data']['status']}"
         )
 
-        # 验证：executor.submit_task 应被调用
+        # 验证：executor.submit_task 应被调用（由 TaskManager 调度触发）
         mock_executor.submit_task.assert_called_once()
 
         # 清理
-        del app.state.task_executor
+        task_manager.set_executor(None)
 
     @pytest.mark.asyncio
     async def test_delete_completed_task(self, client):

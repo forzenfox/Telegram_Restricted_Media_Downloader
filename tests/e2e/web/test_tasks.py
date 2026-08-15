@@ -526,6 +526,67 @@ class TestTaskOperations:
             pytest.skip("任务非failed状态，无法重试")
 
 
+class TestTaskNotification:
+    """T017B: 创建/启动任务成功仅弹一个提示框"""
+
+    def test_create_task_shows_single_success_notification(
+        self, tasks_page: TasksPage, test_token: str, live_server: str
+    ):
+        """
+        T017B-1: 创建下载任务成功后仅显示一个'任务创建成功'提示框
+
+        回归验证：按钮无type="button"时click+submit双触发导致弹两个提示框。
+        """
+        from ..fixtures.test_config import get_test_source_channel
+
+        source = get_test_source_channel()
+        if not source:
+            pytest.skip("未配置test_source_channel，跳过创建任务通知测试")
+
+        tasks_page.navigate(live_server)
+        tasks_page.wait_for_page_loaded()
+
+        # 通过UI创建下载任务
+        tasks_page.create_download_task(
+            source_chat=source,
+            range_mode="id_range",
+            min_id="1",
+            max_id="5",
+        )
+        tasks_page.wait_for_timeout(1500)
+
+        # 统计成功提示数量（通知5秒后自动消失，需及时统计）
+        messages = tasks_page.get_notification_messages()
+        success_count = sum(1 for m in messages if "任务创建成功" in m)
+        assert success_count == 1, (
+            f"创建任务成功应只弹1个成功提示，实际提示: {messages}"
+        )
+
+    def test_start_task_shows_single_success_notification(
+        self,
+        tasks_page: TasksPage,
+        test_token: str,
+        live_server: str,
+        test_task: str,
+    ):
+        """
+        T017B-2: 启动pending任务成功后仅显示一个'任务已启动'提示框
+
+        回归验证：taskManager与Alpine层重复通知导致弹两个提示框。
+        """
+        tasks_page.navigate(live_server)
+        tasks_page.wait_for_page_loaded()
+
+        tasks_page.click_task_start(test_task)
+        tasks_page.wait_for_timeout(1500)
+
+        messages = tasks_page.get_notification_messages()
+        success_count = sum(1 for m in messages if "任务已启动" in m)
+        assert success_count == 1, (
+            f"启动任务成功应只弹1个成功提示，实际提示: {messages}"
+        )
+
+
 class TestDetailDrawerClose:
     """T018: 详情抽屉关闭场景"""
 

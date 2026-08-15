@@ -497,7 +497,7 @@ class TaskManager {
     try {
       await api.startTask(taskId);
       await this.loadTasks();
-      this._notify("success", "任务已启动");
+      // 成功通知由调用方（Alpine 组件层）统一处理，避免重复提示
     } catch (error) {
       this._notify("error", `启动任务失败: ${error.message}`);
     }
@@ -511,7 +511,7 @@ class TaskManager {
     try {
       await api.cancelTask(taskId);
       await this.loadTasks();
-      this._notify("success", "任务已取消");
+      // 成功通知由调用方（Alpine 组件层）统一处理，避免重复提示
     } catch (error) {
       this._notify("error", `取消任务失败: ${error.message}`);
     }
@@ -525,7 +525,7 @@ class TaskManager {
     try {
       await api.retryTask(taskId);
       await this.loadTasks();
-      this._notify("success", "任务已重试");
+      // 成功通知由调用方（Alpine 组件层）统一处理，避免重复提示
     } catch (error) {
       this._notify("error", `重试任务失败: ${error.message}`);
     }

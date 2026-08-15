@@ -14,27 +14,26 @@
 import os
 import sqlite3
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
+from module.core.config_manager import ConfigManager
+from module.core.identifier_service import IdentifierService, ResolvedChat
 from module.core.task.manager import (
-    TaskManager,
-    Task,
-    TaskItem,
-    TaskType,
-    TaskStatus,
     ItemStatus,
-    TaskStateError,
+    Task,
     TaskConflictError,
+    TaskItem,
+    TaskManager,
+    TaskStateError,
+    TaskStatus,
+    TaskType,
     ValidationError,
 )
-from module.core.identifier_service import IdentifierService, ResolvedChat
-from module.core.config_manager import ConfigManager
-
 
 # ============================================================
 # 测试：TaskType 枚举
@@ -774,9 +773,10 @@ class TestResourceProtection:
         """测试磁盘空间检查 OSError 时抛出 ResourceLimitError。"""
         from module.core.task.manager import ResourceLimitError
 
-        with patch("shutil.disk_usage", side_effect=OSError("disk error")):
-            with pytest.raises(ResourceLimitError, match="无法获取磁盘使用信息"):
-                task_manager.check_disk_space()
+        with patch("shutil.disk_usage", side_effect=OSError("disk error")), pytest.raises(
+            ResourceLimitError, match="无法获取磁盘使用信息"
+        ):
+            task_manager.check_disk_space()
 
     @pytest.mark.asyncio
     async def test_disk_space_with_download_dir(self, task_manager):
@@ -1614,8 +1614,8 @@ class TestListTasksPreservesReference:
                 id=f"{task.task_id}_msg_1",
                 task_id=task.task_id,
                 source_message_id=1,
-                created_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
-                updated_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+                created_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+                updated_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
             )
         ]
         await task_manager.add_items(task.task_id, items)
@@ -1654,3 +1654,97 @@ class TestListTasksPreservesReference:
         current_ref = task_manager._tasks[task.task_id]
         assert current_ref is original_ref, "引用不应被替换"
         assert current_ref.status == TaskStatus.RUNNING, "属性应反映最新状态"
+
+
+class FakeExecutor:
+    """模拟 TaskExecutor 提交接口，记录被调度执行的任务。"""
+
+    def __init__(self):
+        self.submitted: list[str] = []
+
+    def submit_task(self, task):
+        self.submitted.append(task.task_id)
+
+
+class TestExecutorDispatch:
+    """方案一：任务执行必须与状态机绑定，由 TaskManager 统一调度到 executor。
+
+    核心约束：
+    - 任务被置为 RUNNING 时才真正提交执行（dispatch）；
+    - 并发满入队（QUEUED）的任务不得立即执行，须由队列调度器触发；
+    - QUEUED 状态不允许直接转到终态（仍抛 TaskStateError）。
+    """
+
+    @pytest_asyncio.fixture
+    async def tm_with_executor(self, db_path):
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(max_concurrent_tasks=1)
+        executor = FakeExecutor()
+        tm.set_executor(executor)
+        yield tm, executor
+        await db.close_db()
+
+    @staticmethod
+    async def _make_task(tm, start_id: int, end_id: int):
+        return await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": start_id, "message_range_end": end_id},
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_direct_running_dispatches_to_executor(self, tm_with_executor):
+        """直接运行（未并发满）时应立即提交到 executor。"""
+        tm, executor = tm_with_executor
+        task = await self._make_task(tm, 1, 10)
+
+        started = await tm.start_task(task.task_id)
+
+        assert started is True
+        assert task.status == TaskStatus.RUNNING
+        assert executor.submitted == [task.task_id]
+
+    @pytest.mark.asyncio
+    async def test_queued_task_not_dispatched_immediately(self, tm_with_executor):
+        """并发已满入队的任务不应被立即提交执行。"""
+        tm, executor = tm_with_executor
+        t1 = await self._make_task(tm, 1, 10)
+        t2 = await self._make_task(tm, 11, 20)
+
+        await tm.start_task(t1.task_id)  # RUNNING
+        await tm.start_task(t2.task_id)  # QUEUED
+
+        assert t2.status == TaskStatus.QUEUED
+        assert t1.task_id in executor.submitted
+        assert t2.task_id not in executor.submitted
+
+    @pytest.mark.asyncio
+    async def test_complete_dispatches_queued_task(self, tm_with_executor):
+        """运行中任务完成后，队列中的任务应被调度为运行并提交执行。"""
+        tm, executor = tm_with_executor
+        t1 = await self._make_task(tm, 1, 10)
+        t2 = await self._make_task(tm, 11, 20)
+
+        await tm.start_task(t1.task_id)
+        await tm.start_task(t2.task_id)  # QUEUED
+        assert t2.task_id not in executor.submitted
+
+        await tm.complete_task(t1.task_id)  # 触发 _process_queue
+
+        assert t2.status == TaskStatus.RUNNING
+        assert t2.task_id in executor.submitted
+
+    @pytest.mark.asyncio
+    async def test_queued_to_completed_raises(self, tm_with_executor):
+        """排队的任务直接转为 completed 应抛出 TaskStateError。"""
+        tm, _ = tm_with_executor
+        t1 = await self._make_task(tm, 1, 10)
+        t2 = await self._make_task(tm, 11, 20)
+
+        await tm.start_task(t1.task_id)
+        await tm.start_task(t2.task_id)  # QUEUED
+
+        with pytest.raises(TaskStateError):
+            await tm.complete_task(t2.task_id)
