@@ -177,6 +177,14 @@ class TestConfigPathConvention:
                 "Linux/Mac 下日志文件路径应包含 .config 或 TRMD"
             )
 
+    def test_log_path_under_logs_dir(self):
+        """验证日志文件位于 logs 子目录（支持 Docker 目录挂载持久化）。"""
+        from module import LOG_PATH
+
+        assert Path(LOG_PATH).parent.name == "logs", (
+            "日志文件应位于 logs 子目录，以便 Docker 目录挂载持久化日志与备份"
+        )
+
     def test_history_file_path_format(self):
         """验证输入历史文件路径格式。"""
         from module import INPUT_HISTORY_PATH

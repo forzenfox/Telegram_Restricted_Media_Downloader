@@ -22,9 +22,8 @@ info "检查环境依赖..."
 command -v docker >/dev/null 2>&1 || { error "Docker 未安装，请先安装 Docker"; exit 1; }
 docker compose version >/dev/null 2>&1 || { error "Docker Compose 未安装"; exit 1; }
 
-# 2. 确保日志文件存在（Docker 文件挂载要求源文件已存在）
+# 2. 确保日志目录存在（Docker 目录挂载 ./logs:/app/module/logs）
 mkdir -p logs
-touch logs/trmd.log
 
 # 3. 检查配置文件
 if [ ! -f config/config.yaml ]; then
