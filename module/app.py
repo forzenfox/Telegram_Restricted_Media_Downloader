@@ -166,8 +166,9 @@ class Application(UserConfig, StatisticalTable):
     def check_download_type(self) -> None:
         if not self.download_type:
             self.download_type = [_ for _ in DownloadType()]
+            # 仅内存补全默认值，不写回磁盘；避免生产环境只读挂载
+            # config.yaml 时启动阶段写入失败（Errno 30）。
             self.config["download_type"] = self.download_type
-            self.save_config(config=self.config)
             console.log(
                 "未找到任何支持的下载类型,已设置为[#f08a5d]「默认」[/#f08a5d]所有已支持的下载类型。"
             )
