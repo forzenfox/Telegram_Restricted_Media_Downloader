@@ -293,6 +293,10 @@ class AppContext:
         # 恢复 running 状态的监听任务
         await self.task_executor.recover_listeners()
 
+        # 调度重启后恢复的排队任务（需在 set_executor 之后调用，
+        # 否则 _dispatch 无法提交执行）
+        await self.task_manager.resume_queued_tasks()
+
     def get_webui_url(self, token: str) -> str:
         """生成 WebUI 访问链接。"""
         return f"http://{self.web_host}:{self.web_port}?token={token}"
