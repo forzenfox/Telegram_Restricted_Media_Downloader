@@ -197,35 +197,28 @@ class TaskManagerError(Exception):
     """TaskManager 基础异常。"""
 
 
-
 class ValidationError(TaskManagerError):
     """参数校验失败。"""
-
 
 
 class ResourceLimitError(TaskManagerError):
     """资源限制触发。"""
 
 
-
 class TaskNotFoundError(TaskManagerError):
     """任务不存在。"""
-
 
 
 class TaskStateError(TaskManagerError):
     """任务状态不允许当前操作。"""
 
 
-
 class TaskConflictError(TaskManagerError):
     """任务冲突，例如同一 chat_id 重复创建监听任务。"""
 
 
-
 class ExecutorError(TaskManagerError):
     """执行器内部错误。"""
-
 
 
 # 向后兼容别名（过渡期保留，后续批次移除）
@@ -311,6 +304,17 @@ class TaskManager:
         """
         await self._load_tasks_from_db()
 
+    async def resume_queued_tasks(self) -> None:
+        """调度重启后恢复的排队任务。
+
+        启动恢复流程中，排队任务会先由 ``_load_tasks_from_db`` 恢复到
+        内存队列，但队列调度依赖 executor 已注入。因此本方法必须在
+        ``set_executor()`` 之后调用，否则 ``_dispatch`` 无法提交执行。
+        """
+        async with self._lock:
+            await self._process_queue()
+        log.info(f"队列调度已触发，剩余排队任务: {len(self._task_queue)}")
+
     # ============================================================
     # 数据库访问层（SQLModel 异步）
     # ============================================================
@@ -332,6 +336,22 @@ class TaskManager:
             if queued_ids:
                 self._task_queue.extend(queued_ids)
                 log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
+
+        # 处理崩溃遗留的 running 非监听任务：标记为 failed，释放并发槽位。
+        # 监听任务由 TaskExecutor.recover_listeners 恢复，不在此处理。
+        # （注意：会话外保存，避免在只读查询会话内执行写操作）
+        stale_running = [
+            task
+            for task in self._tasks.values()
+            if task.status == TaskStatus.RUNNING
+            and task.task_type
+            not in (TaskType.LISTEN_DOWNLOAD, TaskType.LISTEN_FORWARD)
+        ]
+        for task in stale_running:
+            task.status = TaskStatus.FAILED
+            task.error_message = "程序重启导致任务中断，请手动重试"
+            await self._save_task(task)
+            log.info(f"启动时标记遗留 running 任务为 failed: {task.task_id}")
 
     async def _ensure_items(self, task: Task) -> None:
         """惰性加载子任务到 task.items（仅首次从数据库加载，后续跳过）。"""

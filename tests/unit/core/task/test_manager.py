@@ -773,8 +773,9 @@ class TestResourceProtection:
         """测试磁盘空间检查 OSError 时抛出 ResourceLimitError。"""
         from module.core.task.manager import ResourceLimitError
 
-        with patch("shutil.disk_usage", side_effect=OSError("disk error")), pytest.raises(
-            ResourceLimitError, match="无法获取磁盘使用信息"
+        with (
+            patch("shutil.disk_usage", side_effect=OSError("disk error")),
+            pytest.raises(ResourceLimitError, match="无法获取磁盘使用信息"),
         ):
             task_manager.check_disk_space()
 
@@ -1748,3 +1749,208 @@ class TestExecutorDispatch:
 
         with pytest.raises(TaskStateError):
             await tm.complete_task(t2.task_id)
+
+
+# ============================================================
+# 测试：重启恢复机制（盲区 1 & 2）
+# ============================================================
+
+
+class TestRestartRecovery:
+    """测试重启后的任务恢复机制。
+
+    覆盖两个盲区：
+    - 崩溃遗留的 running 非监听任务在启动加载时被标记为 failed（释放并发槽位）；
+    - 排队任务在重启后通过 resume_queued_tasks() 立即调度执行。
+    """
+
+    @pytest.mark.asyncio
+    async def test_init_marks_stale_running_non_listen_as_failed(self, db_path):
+        """崩溃遗留的 running 非监听任务应被标记为 failed。"""
+        from module.core import db
+
+        # 第一轮：模拟崩溃前任务处于 running 状态
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=2)
+        task = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        # 未注入 executor 时 start_task 仅置 RUNNING，模拟进程崩溃残留
+        await tm1.start_task(task.task_id)
+        assert task.status == TaskStatus.RUNNING
+        await db.close_db()
+
+        # 第二轮：重启后 initialize() 应把残留 running 标记为 failed
+        await db.init_db(db_path)
+        tm2 = TaskManager(max_concurrent_tasks=2)
+        await tm2.initialize()
+        task2 = await tm2.get_task(task.task_id)
+        assert task2 is not None
+        assert task2.status == TaskStatus.FAILED
+        assert "重启" in (task2.error_message or "")
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_init_keeps_listen_running_untouched(self, db_path):
+        """running 状态的监听任务不应被标记为 failed（交由 recover_listeners 恢复）。"""
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=2)
+        task = await tm1.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await tm1.start_task(task.task_id)
+        assert task.status == TaskStatus.RUNNING
+        await db.close_db()
+
+        await db.init_db(db_path)
+        tm2 = TaskManager(max_concurrent_tasks=2)
+        await tm2.initialize()
+        task2 = await tm2.get_task(task.task_id)
+        assert task2 is not None
+        assert task2.status == TaskStatus.RUNNING
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_init_keeps_other_states_untouched(self, db_path):
+        """pending/completed/failed/cancelled 状态在启动加载时不受影响。"""
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=2)
+        pending = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        completed = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 11, "message_range_end": 20},
+        )
+        await tm1.start_task(completed.task_id)
+        await tm1.complete_task(completed.task_id)
+        failed = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 21, "message_range_end": 30},
+        )
+        await tm1.start_task(failed.task_id)
+        await tm1.fail_task(failed.task_id, "模拟失败")
+        cancelled = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 31, "message_range_end": 40},
+        )
+        await tm1.cancel_task(cancelled.task_id)
+        await db.close_db()
+
+        await db.init_db(db_path)
+        tm2 = TaskManager(max_concurrent_tasks=2)
+        await tm2.initialize()
+        assert (await tm2.get_task(pending.task_id)).status == TaskStatus.PENDING
+        assert (await tm2.get_task(completed.task_id)).status == TaskStatus.COMPLETED
+        assert (await tm2.get_task(failed.task_id)).status == TaskStatus.FAILED
+        assert (await tm2.get_task(cancelled.task_id)).status == TaskStatus.CANCELLED
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_resume_queued_tasks_dispatches_after_restart(self, db_path):
+        """重启后调用 resume_queued_tasks() 应调度恢复的排队任务。"""
+        from module.core import db
+
+        # 第一轮：并发满时产生排队任务
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=1)
+        t1 = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        t2 = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 11, "message_range_end": 20},
+        )
+        await tm1.start_task(t1.task_id)  # RUNNING
+        await tm1.start_task(t2.task_id)  # QUEUED
+        assert t2.status == TaskStatus.QUEUED
+        await db.close_db()
+
+        # 第二轮：重启加载 + 注入 executor + 触发队列调度
+        await db.init_db(db_path)
+        tm2 = TaskManager(max_concurrent_tasks=1)
+        await tm2.initialize()
+        executor = FakeExecutor()
+        tm2.set_executor(executor)
+        await tm2.resume_queued_tasks()
+
+        t2_reloaded = await tm2.get_task(t2.task_id)
+        assert t2_reloaded.status == TaskStatus.RUNNING
+        assert t2.task_id in executor.submitted
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_resume_queued_tasks_respects_concurrency_limit(self, task_manager):
+        """并发已满时 resume_queued_tasks() 不应越界调度排队任务。"""
+        tm = task_manager  # max_concurrent_tasks=2
+        t1 = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        t2 = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 11, "message_range_end": 20},
+        )
+        t3 = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 21, "message_range_end": 30},
+        )
+        executor = FakeExecutor()
+        tm.set_executor(executor)
+        await tm.start_task(t1.task_id)  # RUNNING
+        await tm.start_task(t2.task_id)  # RUNNING
+        await tm.start_task(t3.task_id)  # QUEUED
+        assert t3.status == TaskStatus.QUEUED
+
+        await tm.resume_queued_tasks()
+
+        assert t3.status == TaskStatus.QUEUED
+        assert t3.task_id not in executor.submitted
+
+    @pytest.mark.asyncio
+    async def test_resume_queued_tasks_without_executor_safe(self, db_path):
+        """executor 未注入时调用 resume_queued_tasks() 不应抛异常。"""
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(max_concurrent_tasks=1)
+        t1 = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        t2 = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 11, "message_range_end": 20},
+        )
+        await tm.start_task(t1.task_id)  # RUNNING
+        await tm.start_task(t2.task_id)  # QUEUED
+        await tm.cancel_task(t1.task_id)  # 释放槽位，t2 仍 QUEUED
+        assert t2.status == TaskStatus.QUEUED
+
+        # 未注入 executor：resume 不应抛异常，任务被置 RUNNING 但无 dispatch
+        await tm.resume_queued_tasks()
+
+        t2_reloaded = await tm.get_task(t2.task_id)
+        assert t2_reloaded.status == TaskStatus.RUNNING
+        await db.close_db()
