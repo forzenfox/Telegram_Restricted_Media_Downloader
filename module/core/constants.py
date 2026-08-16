@@ -49,7 +49,9 @@ read_input_history(
 )
 
 # 日志相关常量
-LOG_PATH = os.path.join(WORK_DIR, "trmd.log")
+# 日志统一放入 logs 子目录，便于 Docker 以目录挂载（./logs:/app/logs）
+# 持久化日志与轮转备份文件。
+LOG_PATH = os.path.join(WORK_DIR, "logs", "trmd.log")
 MAX_LOG_SIZE = 200 * 1024 * 1024  # 200MB
 BACKUP_COUNT = 0  # 不保留日志文件
 LOG_FORMAT = "%(name)s:%(funcName)s:%(lineno)d - %(message)s"

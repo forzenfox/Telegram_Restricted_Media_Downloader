@@ -126,6 +126,10 @@ class TasksPage(BasePage):
     # 资源保护告警弹窗
     MODAL_RESOURCE_ALERT = "modal-resource-alert"
 
+    # 通知提示
+    NOTIFICATION_CONTAINER = "notification-container"
+    NOTIFICATION_ITEM = "notification-item"
+
     def __init__(self, page: Page):
         super().__init__(page)
 
@@ -863,3 +867,46 @@ class TasksPage(BasePage):
         self.click_create_task()
         self.wait_for_create_modal()
         self.select_task_type(task_type)
+
+    # ========== 通知提示 ==========
+
+    def get_notification_items(self) -> list:
+        """
+        获取当前所有通知项（每个通知项为 {type, message} 字典）
+
+        Returns:
+            通知列表，每项包含 type 和 message
+        """
+        items = []
+        locator = self.get_by_testid(self.NOTIFICATION_ITEM)
+        for i in range(locator.count()):
+            el = locator.nth(i)
+            class_attr = el.get_attribute("class") or ""
+            if "border-green-500" in class_attr:
+                ntype = "success"
+            elif "border-red-500" in class_attr:
+                ntype = "error"
+            elif "border-yellow-500" in class_attr:
+                ntype = "warning"
+            else:
+                ntype = "info"
+            items.append({"type": ntype, "message": el.inner_text().strip()})
+        return items
+
+    def get_notification_count(self) -> int:
+        """
+        获取当前通知数量
+
+        Returns:
+            通知数量
+        """
+        return self.get_by_testid(self.NOTIFICATION_ITEM).count()
+
+    def get_notification_messages(self) -> list:
+        """
+        获取当前所有通知消息文本
+
+        Returns:
+            消息文本列表
+        """
+        return [item["message"] for item in self.get_notification_items()]

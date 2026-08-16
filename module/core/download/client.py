@@ -6,35 +6,33 @@
 import asyncio
 import functools
 import inspect
-
+from collections.abc import AsyncGenerator, Callable
 from datetime import datetime
 from hashlib import sha256
-from typing import AsyncGenerator, Optional, Union, List, Callable
 
 import pyrogram
-from pyrogram.crypto import aes
-from pyrogram.qrlogin import QRLogin
 from pyrogram import raw, types, utils
-from pyrogram.raw.core import TLObject
-from pyrogram.session.session import Result
-from pyrogram.session import Auth, Session
-from pyrogram.crypto import mtproto
+from pyrogram.crypto import aes, mtproto
 from pyrogram.errors import (
-    FloodPremiumWait,
-    FloodWait,
-    FileReferenceExpired,
-    InternalServerError,
-    ServiceUnavailable,
     AuthBytesInvalid,
     BadMsgNotification,
-    RPCError,
     CDNFileHashMismatch,
+    FileReferenceExpired,
+    FloodPremiumWait,
+    FloodWait,
+    InternalServerError,
+    RPCError,
+    ServiceUnavailable,
     VolumeLocNotFound,
 )
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
+from pyrogram.qrlogin import QRLogin
+from pyrogram.raw.core import TLObject
+from pyrogram.session import Auth, Session
+from pyrogram.session.session import Result
 from pyrogram.types import User
 
-from module import console, SOFTWARE_SHORT_NAME, log, __version__
+from module import SOFTWARE_SHORT_NAME, __version__, console, log
 from module.core.enums import KeyWord
 from module.core.language import _t
 
@@ -184,7 +182,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                 )
 
                 while True:
-                    console.print("密码提示:{}".format(await self.get_password_hint()))
+                    console.print(f"密码提示:{await self.get_password_hint()}")
 
                     if not self.password:
                         self.password = console.input(
@@ -255,7 +253,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
         return signed_up
 
-    async def authorize_qr(self, except_ids: List[int] = []) -> "User":
+    async def authorize_qr(self, except_ids: list[int] = []) -> "User":
         import qrcode
 
         qr_login = QRLogin(self, except_ids)
@@ -283,14 +281,14 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                 if signed_in:
                     log.info(f"Logged in successfully as {signed_in.full_name}")
                     return signed_in
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 log.info("Recreating QR code.")
                 await qr_login.recreate()
             except pyrogram.errors.SessionPasswordNeeded as e:
                 console.print(e.MESSAGE)
 
                 while True:
-                    console.print("密码提示:{}".format(await self.get_password_hint()))
+                    console.print(f"密码提示:{await self.get_password_hint()}")
 
                     if not self.password:
                         self.password = console.input(
@@ -340,7 +338,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
     async def get_chat_history(
         self: pyrogram.Client,
-        chat_id: Union[int, str],
+        chat_id: int | str,
         limit: int = 0,
         min_id: int = 0,
         max_id: int = 0,
@@ -348,7 +346,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
         offset_id: int = 0,
         offset_date: datetime = utils.zero_datetime(),
         reverse: bool = False,
-    ) -> Optional[AsyncGenerator["types.Message", None]]:
+    ) -> AsyncGenerator["types.Message", None] | None:
         # https://github.com/tangyoha/telegram_media_downloader/blob/master/module/get_chat_history_v2.py
         current = 0
         total = limit or (1 << 31) - 1
@@ -382,14 +380,14 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
     async def get_session(
         self,
-        dc_id: Optional[int] = None,
-        is_media: Optional[bool] = False,
-        is_cdn: Optional[bool] = False,
-        business_connection_id: Optional[str] = None,
-        export_authorization: Optional[bool] = True,
-        server_address: Optional[str] = None,
-        port: Optional[int] = None,
-        temporary: Optional[bool] = False,
+        dc_id: int | None = None,
+        is_media: bool | None = False,
+        is_cdn: bool | None = False,
+        business_connection_id: str | None = None,
+        export_authorization: bool | None = True,
+        server_address: str | None = None,
+        port: int | None = None,
+        temporary: bool | None = False,
     ) -> "Session":
         if not dc_id:
             dc_id = await self.storage.dc_id()
@@ -672,7 +670,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 async def get_chunk(
     *,
     client: pyrogram.Client,
-    chat_id: Union[int, str],
+    chat_id: int | str,
     limit: int = 0,
     offset: int = 0,
     min_id: int = 0,
@@ -712,6 +710,7 @@ class TelegramRestrictedMediaDownloaderSession(Session):
     SLEEP_THRESHOLD = 10
     MAX_RETRIES = 15
     RETRY_DELAY = 1
+    MAX_CYCLES = 3
 
     async def invoke(
         self,
@@ -720,10 +719,11 @@ class TelegramRestrictedMediaDownloaderSession(Session):
         timeout: float = WAIT_TIMEOUT,
         sleep_threshold: float = SLEEP_THRESHOLD,
         retry_delay: float = RETRY_DELAY,
+        max_cycles: int = MAX_CYCLES,
     ):
         try:
             await asyncio.wait_for(self.is_started.wait(), self.WAIT_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         if isinstance(
@@ -735,7 +735,9 @@ class TelegramRestrictedMediaDownloaderSession(Session):
         reconnect_delay: int = 5
         max_reconnect_delay: int = 60
         query_name = ".".join(inner_query.QUALNAME.split(".")[1:])
-        while True:
+        last_error: BaseException | None = None
+        # 外层循环带总轮数上限，防止持续故障时无限重试导致任务永久卡死
+        for _cycle in range(1, max_cycles + 1):
             for attempt in range(1, retries + 1):
                 try:
                     return await self.send(query, timeout=timeout)
@@ -756,7 +758,18 @@ class TelegramRestrictedMediaDownloaderSession(Session):
                     )
 
                     await asyncio.sleep(amount)
-                except (OSError, InternalServerError, ServiceUnavailable) as e:
+                except InternalServerError as e:
+                    # Telegram 服务器内部错误（5xx，如 PERSISTENT_TIMESTAMP_OUTDATED），
+                    # 重试无意义，快速失败交由上层终止任务。
+                    log.error(
+                        '[%s] 调用 "%s" 因服务器内部错误失败: %s',
+                        self.client.name,
+                        query_name,
+                        str(e) or repr(e),
+                    )
+                    raise
+                except (OSError, ServiceUnavailable) as e:
+                    last_error = e
                     log.info(
                         '[%s] Retrying "%s" due to: %s',
                         attempt,
@@ -778,6 +791,11 @@ class TelegramRestrictedMediaDownloaderSession(Session):
             console.log(f"已等待{wait_time}秒,重新尝试重连。", style="#B1DB74")
             if reconnect_delay < max_reconnect_delay:
                 reconnect_delay += 5
+
+        # 达到总循环上限仍失败，抛出最后一次异常，交由上层终止任务
+        if last_error is not None:
+            raise last_error
+        raise TimeoutError(f"调用 {query_name} 达到最大重试上限")
 
     async def send(
         self, data: TLObject, wait_response: bool = True, timeout: float = WAIT_TIMEOUT
@@ -809,7 +827,7 @@ class TelegramRestrictedMediaDownloaderSession(Session):
         if wait_response:
             try:
                 await asyncio.wait_for(self.results[msg_id].event.wait(), timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
             result = self.results.pop(msg_id).value

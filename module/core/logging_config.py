@@ -106,6 +106,17 @@ _load_log_levels_from_config()
 _log_backup_done = False
 
 
+def ensure_log_directory(log_dir: str | None = None) -> str:
+    """确保日志目录存在，返回日志目录路径。
+
+    RotatingFileHandler 不会自动创建父目录，Docker 采用目录挂载
+    （./logs:/app/logs）后，日志目录可能不存在，需在此显式创建。
+    """
+    log_dir = log_dir or os.path.dirname(LOG_PATH)
+    os.makedirs(log_dir, exist_ok=True)
+    return log_dir
+
+
 def _has_recent_backup(seconds: int = 10) -> bool:
     """检查是否已经有最近的备份文件。
 
@@ -166,7 +177,9 @@ def _backup_existing_log_file():
         # 如果备份文件已存在（极少情况），添加计数器
         counter = 1
         while os.path.exists(backup_path):
-            backup_path = os.path.join(log_dir, f"{log_base}_{timestamp}_{counter}{log_ext}")
+            backup_path = os.path.join(
+                log_dir, f"{log_base}_{timestamp}_{counter}{log_ext}"
+            )
             counter += 1
 
         try:
@@ -180,6 +193,9 @@ def _backup_existing_log_file():
     else:
         _log_backup_done = True
 
+
+# 确保日志目录存在（支持 Docker 目录挂载场景）
+ensure_log_directory()
 
 # 备份旧日志文件
 _backup_existing_log_file()

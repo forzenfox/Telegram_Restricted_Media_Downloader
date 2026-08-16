@@ -12,15 +12,15 @@ Task / TaskItem dataclass。两者通过 _task_to_record / _record_to_task 等
 mapper 方法相互转换。
 """
 
-import os
-import uuid
-import shutil
-import logging
 import asyncio
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional, TYPE_CHECKING
+import logging
+import os
+import shutil
+import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import delete, func
 from sqlmodel import select
@@ -29,8 +29,8 @@ from module.core.db import get_session
 from module.core.task.models import TaskItemRecord, TaskRecord
 
 if TYPE_CHECKING:
-    from module.core.identifier_service import IdentifierService, ResolvedChat
     from module.core.config_manager import ConfigManager
+    from module.core.identifier_service import IdentifierService, ResolvedChat
 
 log = logging.getLogger("rich")
 
@@ -84,21 +84,21 @@ class TaskItem:
     id: str
     task_id: str
     status: ItemStatus = ItemStatus.PENDING
-    source_message_id: Optional[int] = None
-    source_file_path: Optional[str] = None
-    target_chat_id: Optional[int] = None
-    file_path: Optional[str] = None
+    source_message_id: int | None = None
+    source_file_path: str | None = None
+    target_chat_id: int | None = None
+    file_path: str | None = None
     file_size: int = 0
-    file_sha256: Optional[str] = None
-    telegram_file_id: Optional[str] = None
-    file_unique_id: Optional[str] = None
-    media_group_id: Optional[str] = None
-    uploaded_message_id: Optional[int] = None
+    file_sha256: str | None = None
+    telegram_file_id: str | None = None
+    file_unique_id: str | None = None
+    media_group_id: str | None = None
+    uploaded_message_id: int | None = None
     retry_count: int = 0
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     extra: dict = field(default_factory=dict)
 
     # ---- 辅助方法 ----
@@ -141,17 +141,17 @@ class Task:
     task_id: str
     task_type: TaskType
     chat_id: int
-    chat_username: Optional[str] = None
-    chat_type: Optional[str] = None
+    chat_username: str | None = None
+    chat_type: str | None = None
     status: TaskStatus = TaskStatus.PENDING
     items: list[TaskItem] = field(default_factory=list)
     total_size_bytes: int = 0
     retry_count: int = 0
     max_retry_count: int = 5
-    error_message: Optional[str] = None
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     params: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
 
@@ -196,43 +196,36 @@ class Task:
 class TaskManagerError(Exception):
     """TaskManager 基础异常。"""
 
-    pass
 
 
 class ValidationError(TaskManagerError):
     """参数校验失败。"""
 
-    pass
 
 
 class ResourceLimitError(TaskManagerError):
     """资源限制触发。"""
 
-    pass
 
 
 class TaskNotFoundError(TaskManagerError):
     """任务不存在。"""
 
-    pass
 
 
 class TaskStateError(TaskManagerError):
     """任务状态不允许当前操作。"""
 
-    pass
 
 
 class TaskConflictError(TaskManagerError):
     """任务冲突，例如同一 chat_id 重复创建监听任务。"""
 
-    pass
 
 
 class ExecutorError(TaskManagerError):
     """执行器内部错误。"""
 
-    pass
 
 
 # 向后兼容别名（过渡期保留，后续批次移除）
@@ -293,8 +286,23 @@ class TaskManager:
         self._lock = asyncio.Lock()
         # 已惰性加载子任务的任务 ID 集合
         self._items_loaded: set[str] = set()
+        # 任务执行器（由外部在创建后注入，用于真正触发任务执行）
+        self._executor: Any | None = None
         # 注意：建表由 module.core.db.init_db 统一处理；
         #       历史任务加载由 initialize() 异步完成。
+
+    def set_executor(self, executor: Any) -> None:
+        """注入任务执行器。
+
+        被注入的 executor 必须提供 submit_task(task) 方法，用于将任务
+        提交到正确的异步事件循环执行。当任务被调度为 RUNNING 时触发。
+        """
+        self._executor = executor
+
+    async def _dispatch(self, task: Task) -> None:
+        """将任务提交到 executor 执行（仅当 executor 存在时）。"""
+        if self._executor is not None:
+            self._executor.submit_task(task)
 
     async def initialize(self) -> None:
         """初始化 TaskManager：从数据库加载历史任务到内存缓存。
@@ -464,8 +472,8 @@ class TaskManager:
     async def _resolve_chat_id(
         self,
         task_type: TaskType,
-        chat_id: Optional[int],
-        params: Optional[dict],
+        chat_id: int | None,
+        params: dict | None,
     ) -> "ResolvedChat":
         """解析并返回标准化对话信息。
 
@@ -534,7 +542,7 @@ class TaskManager:
 
     def _resolve_enable_repository_backup(
         self, task_type: TaskType, params: dict
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """解析仓库备份参数：任务级覆盖优先，否则继承全局配置。"""
         if task_type not in (TaskType.DOWNLOAD, TaskType.LISTEN_DOWNLOAD):
             return None
@@ -563,8 +571,8 @@ class TaskManager:
     async def create_task(
         self,
         task_type: TaskType,
-        chat_id: Optional[int] = None,
-        params: Optional[dict] = None,
+        chat_id: int | None = None,
+        params: dict | None = None,
         auto_start: bool = False,
     ) -> Task:
         """创建任务。
@@ -640,7 +648,7 @@ class TaskManager:
             chat_type=resolved_chat.chat_type,
             params=params,
             max_retry_count=self._max_retry_count,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             extra={"source_type": source_type},
         )
         async with self._lock:
@@ -671,9 +679,11 @@ class TaskManager:
                 # 直接运行
                 self._validate_transition(task.status, TaskStatus.RUNNING)
                 task.status = TaskStatus.RUNNING
-                task.started_at = datetime.now(timezone.utc)
+                task.started_at = datetime.now(UTC)
                 await self._save_task(task)
                 log.info(f"任务开始执行: {task_id}")
+                # 任务真正进入 RUNNING 后才提交执行，保证状态机与执行同步
+                await self._dispatch(task)
                 return True
 
     async def complete_task(self, task_id: str):
@@ -685,7 +695,7 @@ class TaskManager:
 
             self._validate_transition(task.status, TaskStatus.COMPLETED)
             task.status = TaskStatus.COMPLETED
-            task.completed_at = datetime.now(timezone.utc)
+            task.completed_at = datetime.now(UTC)
             await self._save_task(task)
             log.info(f"任务已完成: {task_id}")
 
@@ -708,7 +718,7 @@ class TaskManager:
             # 尝试启动队列中的下一个任务
             await self._process_queue()
 
-    async def cancel_task(self, task_id: str, reason: Optional[str] = None):
+    async def cancel_task(self, task_id: str, reason: str | None = None):
         """取消任务。"""
         async with self._lock:
             task = self._tasks.get(task_id)
@@ -759,7 +769,7 @@ class TaskManager:
             await self._save_task(task)
             log.info(f"任务重试: {task_id} (第 {task.retry_count} 次)")
 
-    async def get_task(self, task_id: str, with_items: bool = False) -> Optional[Task]:
+    async def get_task(self, task_id: str, with_items: bool = False) -> Task | None:
         """获取任务。
 
         Args:
@@ -773,9 +783,9 @@ class TaskManager:
 
     async def list_tasks(
         self,
-        status: Optional[TaskStatus] = None,
-        task_type: Optional[TaskType] = None,
-        limit: Optional[int] = None,
+        status: TaskStatus | None = None,
+        task_type: TaskType | None = None,
+        limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[Task], int]:
         """获取任务列表，支持状态过滤、类型过滤和分页。
@@ -877,7 +887,7 @@ class TaskManager:
 
     async def add_items(self, task_id: str, items: list[TaskItem]):
         """添加子任务项。"""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -900,8 +910,8 @@ class TaskManager:
         task_id: str,
         item_id: str,
         status: ItemStatus,
-        error_message: Optional[str] = None,
-        error_code: Optional[str] = None,
+        error_message: str | None = None,
+        error_code: str | None = None,
         **kwargs,
     ):
         """更新子任务状态，支持额外字段更新。
@@ -914,7 +924,7 @@ class TaskManager:
             error_code: 可选的错误代码（机器可读）
             **kwargs: 额外要更新的字段（如 file_unique_id, file_sha256 等）
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -962,7 +972,7 @@ class TaskManager:
         await self._ensure_items(task)
         return [item for item in task.items if item.status == ItemStatus.FAILED]
 
-    def check_size_threshold(self, size_bytes: int) -> tuple[str, Optional[str]]:
+    def check_size_threshold(self, size_bytes: int) -> tuple[str, str | None]:
         """检查任务大小阈值。
 
         返回:
@@ -988,7 +998,7 @@ class TaskManager:
         return "ok", None
 
     def check_disk_space(
-        self, estimated_size: int = 0, download_dir: Optional[str] = None
+        self, estimated_size: int = 0, download_dir: str | None = None
     ) -> bool:
         """检查磁盘空间是否充足。
 
@@ -1040,6 +1050,8 @@ class TaskManager:
             task = self._tasks.get(next_task_id)
             if task and task.status == TaskStatus.QUEUED:
                 task.status = TaskStatus.RUNNING
-                task.started_at = datetime.now(timezone.utc)
+                task.started_at = datetime.now(UTC)
                 await self._save_task(task)
                 log.info(f"队列任务已启动: {next_task_id}")
+                # 任务正式 RUNNING 后提交执行，保证状态机与执行同步
+                await self._dispatch(task)

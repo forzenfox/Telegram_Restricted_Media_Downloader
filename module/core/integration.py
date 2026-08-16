@@ -8,20 +8,19 @@
 - 提供统一的应用上下文
 """
 
-import os
 import logging
-from typing import Optional
+import os
 
 from module.core import db
 from module.core.auth.token_manager import TokenManager
-from module.core.task.manager import TaskManager
 from module.core.cache.manager import CacheManager
-from module.core.download.file_manager import FileManager
-from module.core.repository.db import RepositoryDB
-from module.core.repository.sync import RepositorySync
 from module.core.config_manager import ConfigManager
 from module.core.download.client_manager import ClientManager
+from module.core.download.file_manager import FileManager
 from module.core.interaction_manager import InteractionManager
+from module.core.repository.db import RepositoryDB
+from module.core.repository.sync import RepositorySync
+from module.core.task.manager import TaskManager
 
 log = logging.getLogger("rich")
 
@@ -41,8 +40,8 @@ class AppContext:
 
     def __init__(
         self,
-        data_dir: Optional[str] = None,
-        root_user_id: Optional[int] = None,
+        data_dir: str | None = None,
+        root_user_id: int | None = None,
         web_host: str = "127.0.0.1",
         web_port: int = 8000,
     ):
@@ -288,6 +287,9 @@ class AppContext:
         )
         log.info("TaskExecutor 已初始化")
 
+        # 将执行器注入 TaskManager，使其能统一调度任务执行
+        self.task_manager.set_executor(self.task_executor)
+
         # 恢复 running 状态的监听任务
         await self.task_executor.recover_listeners()
 
@@ -317,7 +319,7 @@ class AppContext:
             log.info("应用上下文已异步清理")
 
 
-def get_context() -> Optional[AppContext]:
+def get_context() -> AppContext | None:
     """获取当前应用上下文实例。"""
     return AppContext._instance
 

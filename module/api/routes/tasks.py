@@ -5,33 +5,34 @@
 """
 
 import logging
-from typing import Optional, cast
+from typing import cast
 
-from fastapi import APIRouter, Depends, Request, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from module.api.dependencies import (
-    require_token,
-    get_task_manager,
-    get_task_executor,
     get_identifier_service,
+    get_task_manager,
+    require_token,
 )
-from module.api.responses import json_response, error_json_response
-from module.api.models.task import TaskCreate, TaskOut
 from module.api.exceptions import (
-    TaskNotFoundError,
-    TaskSizeWarning,
     InsufficientDiskSpace,
     TaskConflictError,
+    TaskNotFoundError,
+    TaskSizeWarning,
+)
+from module.api.models.task import TaskCreate, TaskOut
+from module.api.responses import error_json_response, json_response
+from module.core.identifier_service import IdentifierService
+from module.core.task.manager import (
+    Task,
+    TaskManager,
+    TaskStateError,
+    TaskStatus,
+    TaskType,
 )
 from module.core.task.manager import (
-    TaskManager,
-    Task,
-    TaskType,
-    TaskStatus,
-    TaskStateError,
     TaskConflictError as CoreTaskConflictError,
 )
-from module.core.identifier_service import IdentifierService
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
 logger = logging.getLogger(__name__)
@@ -71,14 +72,14 @@ async def list_tasks(
     request: Request,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
-    status_filter: Optional[str] = Query(None, alias="status"),
-    task_type: Optional[str] = Query(None, alias="task_type"),
+    status_filter: str | None = Query(None, alias="status"),
+    task_type: str | None = Query(None, alias="task_type"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
     """获取任务列表，支持分页和过滤。"""
     # 参数校验
-    status_enum: Optional[TaskStatus] = None
+    status_enum: TaskStatus | None = None
     if status_filter:
         try:
             status_enum = TaskStatus(status_filter)
@@ -87,7 +88,7 @@ async def list_tasks(
                 code=400, message=f"无效的状态: {status_filter}", status_code=400
             )
 
-    type_enum: Optional[TaskType] = None
+    type_enum: TaskType | None = None
     if task_type:
         try:
             type_enum = TaskType(task_type)
@@ -261,20 +262,17 @@ async def start_task(
     request: Request,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
-    executor=Depends(get_task_executor),
 ):
-    """开始/排队任务，并触发 TaskExecutor 异步执行。"""
+    """开始/排队任务。
+
+    任务执行由 TaskManager 统一调度：直接运行的任务在进入 RUNNING 时
+    立即提交执行；并发已满入队的任务在队列中被调度时才会执行。
+    """
     try:
         started = await task_manager.start_task(task_id)
         task = await task_manager.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-
-        # 触发 TaskExecutor 异步执行任务（不阻塞 API 响应）。
-        # 注意：TaskExecutor 运行在 Telegram Client 的事件循环，必须通过
-        # submit_task() 提交到正确 loop，否则会出现跨 loop 的 RuntimeError。
-        if executor is not None:
-            executor.submit_task(task)
 
         return json_response(
             data=_task_to_out(task).model_dump(mode="json"),
@@ -320,23 +318,18 @@ async def retry_task(
     request: Request,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
-    executor=Depends(get_task_executor),
 ):
-    """重试任务，重置状态后自动触发执行。"""
+    """重试任务，重置状态后由 TaskManager 统一调度执行。"""
     try:
         # 1. 重置任务状态为 pending（重试子任务、清空错误信息）
         await task_manager.retry_task(task_id)
 
-        # 2. 自动启动任务（PENDING → RUNNING/QUEUED）
+        # 2. 自动启动任务（PENDING → RUNNING/QUEUED，内部触发执行）
         started = await task_manager.start_task(task_id)
 
         task = await task_manager.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-
-        # 3. 触发 TaskExecutor 异步执行
-        if executor is not None:
-            executor.submit_task(task)
 
         return json_response(
             data=_task_to_out(task).model_dump(mode="json"),

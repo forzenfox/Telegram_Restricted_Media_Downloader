@@ -14,9 +14,8 @@ NC='\033[0m'
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
-# 1. 确保日志文件存在
+# 1. 确保日志目录存在（Docker 目录挂载 ./logs:/app/module/logs）
 mkdir -p logs
-touch logs/trmd.log
 
 # 2. 加载 .env
 if [ -f .env ]; then
