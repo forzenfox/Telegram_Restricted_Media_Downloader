@@ -3,88 +3,93 @@
 # Software:PyCharm
 # Time:2023/10/3 1:00:03
 # File:downloader.py
-import os
-import random
 import asyncio
 import datetime
-
+import os
+import random
+from collections.abc import Callable
 from functools import partial
 from sqlite3 import OperationalError
-from typing import Union, Callable, Optional, Dict, Set
 
 import pyrogram
 from pyrogram.enums.parse_mode import ParseMode
 from pyrogram.errors import (
     BadMsgNotification,
     FileReferenceExpired,
-    FloodWait,
     FloodPremiumWait,
+    FloodWait,
 )
 from pyrogram.errors.exceptions.bad_request_400 import (
+    BotMethodInvalid,
+    ChannelInvalid,
+    MessageNotModified,
     MsgIdInvalid,
     UsernameInvalid,
-    ChannelInvalid,
-    BotMethodInvalid,
     UsernameNotOccupied,
-    MessageNotModified,
+)
+from pyrogram.errors.exceptions.bad_request_400 import (
     ChannelPrivate as ChannelPrivate_400,
+)
+from pyrogram.errors.exceptions.bad_request_400 import (
     ChatForwardsRestricted as ChatForwardsRestricted_400,
 )
+from pyrogram.errors.exceptions.forbidden_403 import ChatWriteForbidden
 from pyrogram.errors.exceptions.not_acceptable_406 import (
     ChannelPrivate as ChannelPrivate_406,
+)
+from pyrogram.errors.exceptions.not_acceptable_406 import (
     ChatForwardsRestricted as ChatForwardsRestricted_406,
 )
 from pyrogram.errors.exceptions.unauthorized_401 import (
-    SessionRevoked,
     AuthKeyUnregistered,
     SessionExpired,
+    SessionRevoked,
     Unauthorized,
 )
-from pyrogram.errors.exceptions.forbidden_403 import ChatWriteForbidden
-from pyrogram.types.messages_and_media import ReplyParameters
 from pyrogram.types.bots_and_keyboards import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types.messages_and_media import ReplyParameters
 
-from module import console, log, LINK_PREVIEW_OPTIONS, SLEEP_THRESHOLD
-from module.utils.filter import Filter
+from module import LINK_PREVIEW_OPTIONS, SLEEP_THRESHOLD, console, log
 from module.app import Application
-from module.bot import Bot, KeyboardButton, CallbackData
+from module.bot import Bot, CallbackData, KeyboardButton
+from module.core.download.uploader import TelegramUploader
 from module.core.enums import (
-    DownloadStatus,
-    LinkType,
-    KeyWord,
-    BotCallbackText,
     BotButton,
+    BotCallbackText,
     BotMessage,
-    DownloadType,
     CalenderKeyboard,
+    DownloadStatus,
+    DownloadType,
+    KeyWord,
+    LinkType,
     SaveDirectoryPrefix,
 )
 from module.core.language import _t
-from module.utils.path_tool import (
-    is_file_duplicate,
-    safe_delete,
-    get_file_size,
-    split_path,
-    compare_file_size,
-    move_to_save_directory,
-    safe_replace,
-    validate_title,
-)
 from module.core.task.legacy import DownloadTask, UploadTask
-from module.utils.stdio import ProgressBar, MetaData
-from module.core.download.uploader import TelegramUploader
+from module.utils.filter import Filter
 from module.utils.helpers import (
+    Issues,
+    format_chat_link,
+    get_chat_with_notify,
+    get_message_by_link,
+    get_my_id,
     is_docker,
     parse_link,
-    format_chat_link,
-    get_my_id,
-    get_message_by_link,
-    get_chat_with_notify,
-    safe_message,
     safe_delete_message,
+    safe_message,
     truncate_display_filename,
-    Issues,
 )
+from module.utils.path_tool import (
+    compare_file_size,
+    get_file_size,
+    is_file_duplicate,
+    move_to_save_directory,
+    safe_delete,
+    safe_replace,
+    split_path,
+    validate_title,
+)
+from module.utils.stdio import MetaData, ProgressBar
 
 
 class TelegramRestrictedMediaDownloader(Bot):
@@ -95,11 +100,11 @@ class TelegramRestrictedMediaDownloader(Bot):
         self.queue: asyncio.Queue = asyncio.Queue()
         self.app: Application = Application()
         self.is_running: bool = False
-        self.running_log: Set[bool] = set()
+        self.running_log: set[bool] = set()
         self.running_log.add(self.is_running)
         self.pb: ProgressBar = ProgressBar()
-        self.uploader: Union[TelegramUploader, None] = None
-        self.cd: Union[CallbackData, None] = None
+        self.uploader: TelegramUploader | None = None
+        self.cd: CallbackData | None = None
         self.my_id: int = 0
         self.repository_manager = None  # 可选的 RepositoryManager，在启动时初始化
 
@@ -110,7 +115,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 if placeholder == SaveDirectoryPrefix.CHAT_ID:
                     save_directory = save_directory.replace(
                         placeholder,
-                        str(getattr(getattr(message, "chat"), "id", "UNKNOWN_CHAT_ID")),
+                        str(getattr(message.chat, "id", "UNKNOWN_CHAT_ID")),
                     )
                 if placeholder == SaveDirectoryPrefix.CHAT_NAME:
                     save_directory = save_directory.replace(
@@ -118,7 +123,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                         validate_title(
                             str(
                                 getattr(
-                                    getattr(message, "chat"),
+                                    message.chat,
                                     "full_name",
                                     "UNKNOWN_CHAT_NAME",
                                 )
@@ -135,16 +140,16 @@ class TelegramRestrictedMediaDownloader(Bot):
         self,
         client: pyrogram.Client,
         message: pyrogram.types.Message,
-        with_upload: Union[dict, None] = None,
+        with_upload: dict | None = None,
     ):
-        link_meta: Union[dict, None] = await super().get_download_link_from_bot(
+        link_meta: dict | None = await super().get_download_link_from_bot(
             client, message
         )
         if link_meta is None:
-            return None
+            return
         right_link: set = link_meta.get("right_link")
         invalid_link: set = link_meta.get("invalid_link")
-        last_bot_message: Union[pyrogram.types.Message, None] = link_meta.get(
+        last_bot_message: pyrogram.types.Message | None = link_meta.get(
             "last_bot_message"
         )
         exist_link: set = set([_ for _ in right_link if _ in self.bot_task_link])
@@ -164,19 +169,36 @@ class TelegramRestrictedMediaDownloader(Bot):
             )
         else:
             log.warning("消息过长编辑频繁,暂时无法通过机器人显示通知。")
-        links: Union[set, None] = self.__process_links(link=list(right_link))
+        links: set | None = self.__process_links(link=list(right_link))
 
         if links is None:
-            return None
-        for link in links:
-            task: dict = await self.create_download_task(
-                message_ids=link, retry=None, with_upload=with_upload
-            )
-            (
-                invalid_link.add(link)
-                if task.get("status") == DownloadStatus.FAILURE
-                else self.bot_task_link.add(link)
-            )
+            return
+
+        # 桥接到 TaskManager 调度（任务在 Web 端可见、可监控）。
+        # 仅普通下载走新架构；with_upload（下载后上传）暂回退旧架构，
+        # 待 TaskExecutor 补齐下载后上传能力后再统一。
+        from module.bot.bot_bridge import BotTaskBridge
+        from module.core.integration import get_context
+
+        ctx = get_context()
+        task_manager = getattr(ctx, "task_manager", None) if ctx else None
+        if task_manager is not None and not with_upload:
+            bridge = BotTaskBridge(task_manager=task_manager, client=self.app.client)
+            result = await bridge.create_download_tasks_from_links(list(right_link))
+            failed_set = {link for link, _ in result["failed"]}
+            # 记录成功链接，避免重复下载
+            self.bot_task_link.update(set(right_link) - failed_set)
+            invalid_link.update(failed_set)
+        else:
+            for link in links:
+                task: dict = await self.create_download_task(
+                    message_ids=link, retry=None, with_upload=with_upload
+                )
+                (
+                    invalid_link.add(link)
+                    if task.get("status") == DownloadStatus.FAILURE
+                    else self.bot_task_link.add(link)
+                )
         right_link -= invalid_link
         await self.safe_edit_message(
             client=client,
@@ -198,7 +220,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         recursion: bool = False,
         valid_link_cache: dict = None,
     ):
-        link_meta: Union[dict, None] = await super().get_upload_link_from_bot(
+        link_meta: dict | None = await super().get_upload_link_from_bot(
             client=client,
             message=message,
             delete=delete,
@@ -207,13 +229,35 @@ class TelegramRestrictedMediaDownloader(Bot):
             valid_link_cache=valid_link_cache,
         )
         if link_meta is None:
-            return None
+            return
         target_link: str = link_meta.get("target_link")
         valid_link_cache: dict = link_meta.get("valid_link_cache")
         upload_task = link_meta.get("upload_task")
         upload_task.with_delete = (
             self.app.config.get("preference", {}).get("upload", {}).get("delete", False)
         )
+        # 桥接到 TaskManager 调度（任务在 Web 端可见、可监控）。
+        # 桥接失败时回退旧架构上传，保证功能不中断。
+        from module.bot.bot_bridge import BotTaskBridge
+        from module.core.integration import get_context
+
+        ctx = get_context()
+        task_manager = getattr(ctx, "task_manager", None) if ctx else None
+        if task_manager is not None:
+            bridge = BotTaskBridge(
+                task_manager=task_manager,
+                client=self.app.client,
+                config_manager=getattr(ctx, "config_manager", None),
+            )
+            try:
+                await bridge.create_upload_task(
+                    file_path=upload_task.file_path,
+                    target_identifier=target_link,
+                    delete_after_upload=upload_task.with_delete,
+                )
+                return
+            except Exception as e:
+                log.warning(f"上传任务桥接失败，回退旧架构: {e}")
         await self.uploader.create_upload_task(
             link=(
                 valid_link_cache.get(target_link, None) or target_link
@@ -243,7 +287,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         callback_data = await super().callback_data(client, callback_query)
         kb = KeyboardButton(callback_query)
         if callback_data is None:
-            return None
+            return
         elif callback_data == BotCallbackText.NOTICE:
             try:
                 pref = self.app.config.setdefault("preference", {})
@@ -276,13 +320,13 @@ class TelegramRestrictedMediaDownloader(Bot):
             BotCallbackText.DOWNLOAD_UPLOAD,
         ):
             if not isinstance(self.cd.data, dict):
-                return None
-            meta: Union[dict, None] = self.cd.data.copy()
+                return
+            meta: dict | None = self.cd.data.copy()
             self.cd.data = None
             origin_link: str = meta.get("origin_link")
             target_link: str = meta.get("target_link")
-            start_id: Union[int, None] = meta.get("start_id")
-            end_id: Union[int, None] = meta.get("end_id")
+            start_id: int | None = meta.get("start_id")
+            end_id: int | None = meta.get("end_id")
             if callback_data == BotCallbackText.DOWNLOAD:
                 self.last_message.text = f"/download {origin_link} {start_id} {end_id}"
                 await self.get_download_link_from_bot(
@@ -345,30 +389,28 @@ class TelegramRestrictedMediaDownloader(Bot):
             _prompt_string: str = ""
             _false_text: str = ""
             _choice: str = ""
-            res: Union[bool, None] = None
+            res: bool | None = None
             if callback_data == BotCallbackText.LINK_TABLE:
                 _prompt_string: str = "链接统计表"
                 _false_text: str = "😵😵😵没有链接需要统计。"
                 _choice: str = BotCallbackText.EXPORT_LINK_TABLE
-                res: Union[bool, None] = self.app.print_link_table(
-                    DownloadTask.LINK_INFO
-                )
+                res: bool | None = self.app.print_link_table(DownloadTask.LINK_INFO)
             elif callback_data == BotCallbackText.COUNT_TABLE:
                 _prompt_string: str = "计数统计表"
                 _false_text: str = "😵😵😵当前没有任何下载。"
                 _choice: str = BotCallbackText.EXPORT_COUNT_TABLE
-                res: Union[bool, None] = self.app.print_count_table()
+                res: bool | None = self.app.print_count_table()
             elif callback_data == BotCallbackText.UPLOAD_TABLE:
                 _prompt_string: str = "上传统计表"
                 _false_text: str = "😵😵😵当前没有任何上传。"
                 _choice: str = BotCallbackText.EXPORT_UPLOAD_TABLE
-                res: Union[bool, None] = self.app.print_upload_table(UploadTask.TASKS)
+                res: bool | None = self.app.print_upload_table(UploadTask.TASKS)
             if res:
                 await callback_query.message.edit_text(
                     f"👌👌👌`{_prompt_string}`已发送至您的「终端」请注意查收。"
                 )
                 await kb.choice_export_table_button(choice=_choice)
-                return None
+                return
             elif res is False:
                 await callback_query.message.edit_text(_false_text)
             else:
@@ -415,23 +457,23 @@ class TelegramRestrictedMediaDownloader(Bot):
         ):
             _prompt_string: str = ""
             _folder: str = ""
-            res: Union[bool, None] = False
+            res: bool | None = False
             if callback_data == BotCallbackText.EXPORT_LINK_TABLE:
                 _prompt_string: str = "链接统计表"
                 _folder: str = "DownloadRecordForm"
-                res: Union[bool, None] = self.app.print_link_table(
+                res: bool | None = self.app.print_link_table(
                     link_info=DownloadTask.LINK_INFO, export=True, only_export=True
                 )
             elif callback_data == BotCallbackText.EXPORT_COUNT_TABLE:
                 _prompt_string: str = "计数统计表"
                 _folder: str = "DownloadRecordForm"
-                res: Union[bool, None] = self.app.print_count_table(
+                res: bool | None = self.app.print_count_table(
                     export=True, only_export=True
                 )
             elif callback_data == BotCallbackText.EXPORT_UPLOAD_TABLE:
                 _prompt_string: str = "上传统计表"
                 _folder: str = "UploadRecordForm"
-                res: Union[bool, None] = self.app.print_upload_table(
+                res: bool | None = self.app.print_upload_table(
                     upload_tasks=UploadTask.TASKS, export=True, only_export=True
                 )
             if res:
@@ -601,7 +643,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         ):
             # 委托给 CommandRouter 处理（新格式: rld_{task_id} / rlf_{task_id}）
             await self._commands.handle_remove_listen_callback(client, callback_query)
-            return None
+            return
         elif callback_data in (
             BotCallbackText.DOWNLOAD_CHAT_FILTER,  # 主页面。
             BotCallbackText.DOWNLOAD_CHAT_DATE_FILTER,  # 下载日期范围设置页面。
@@ -738,7 +780,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 if callback_data == BotCallbackText.DOWNLOAD_CHAT_DATE_FILTER:
                     start_time, end_time = _get_update_time()
                     if not await _verification_time(start_time, end_time):
-                        return None
+                        return
                 # 返回或点击。
                 await callback_query.message.edit_text(
                     text=_filter_prompt(),
@@ -981,12 +1023,12 @@ class TelegramRestrictedMediaDownloader(Bot):
         client: pyrogram.Client,
         message: pyrogram.types.Message,
         message_id: int,
-        origin_chat_id: Union[str, int],
-        target_chat_id: Union[str, int],
+        origin_chat_id: str | int,
+        target_chat_id: str | int,
         target_link: str,
-        download_upload: Optional[bool] = False,
-        media_group: Optional[list] = None,
-        done_notice: Optional[bool] = True,
+        download_upload: bool | None = False,
+        media_group: list | None = None,
+        done_notice: bool | None = True,
     ):
         try:
             if not self.check_type(message):
@@ -1004,7 +1046,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                             f'"{target_chat_id}",{_t(KeyWord.FORWARD_SKIP)}(该类型已过滤)。'
                         )
                     )
-                return None
+                return
             if media_group:
                 await self.app.client.copy_media_group(
                     chat_id=target_chat_id,
@@ -1067,7 +1109,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                     getattr(getattr(message, "from_user", None), "id", -1)
                     == getattr(getattr(client, "me", None), "id", None)
                 ):
-                    return None
+                    return
                 raise
             # 尝试仓库模式分发：去重检查 -> 从仓库分发
             if (
@@ -1106,7 +1148,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                                             f'"{target_chat_id}",{_t(KeyWord.FORWARD_SUCCESS)}(仓库分发)。'
                                         )
                                     )
-                                return None
+                                return
                 except Exception as e:
                     log.warning(
                         f'仓库分发失败,回退到原始逻辑,{_t(KeyWord.REASON)}:"{e}"'
@@ -1135,7 +1177,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                         ]
                     ),
                 )
-                return None
+                return
             self.last_message.text = f"/download {link}?single"
             await self.get_download_link_from_bot(
                 client=self.last_client,
@@ -1155,10 +1197,8 @@ class TelegramRestrictedMediaDownloader(Bot):
 
     async def get_forward_link_from_bot(
         self, client: pyrogram.Client, message: pyrogram.types.Message
-    ) -> Union[dict, None]:
-        meta: Union[dict, None] = await super().get_forward_link_from_bot(
-            client, message
-        )
+    ) -> dict | None:
+        meta: dict | None = await super().get_forward_link_from_bot(client, message)
         if meta is None:
             return None
         self.last_client: pyrogram.Client = client
@@ -1167,27 +1207,57 @@ class TelegramRestrictedMediaDownloader(Bot):
         target_link: str = meta.get("target_link")
         start_id: int = meta.get("message_range")[0]
         end_id: int = meta.get("message_range")[1]
-        last_message: Union[pyrogram.types.Message, None] = None
+
+        # 桥接到 TaskManager 调度（任务在 Web 端可见、可监控）。
+        # 桥接失败时回退旧架构转发，保证功能不中断。
+        from module.bot.bot_bridge import BotTaskBridge
+        from module.core.integration import get_context
+
+        ctx = get_context()
+        task_manager = getattr(ctx, "task_manager", None) if ctx else None
+        if task_manager is not None:
+            bridge = BotTaskBridge(
+                task_manager=task_manager,
+                client=self.app.client,
+                config_manager=getattr(ctx, "config_manager", None),
+            )
+            try:
+                await bridge.create_forward_task(
+                    origin_identifier=origin_link,
+                    target_identifier=target_link,
+                    start_id=start_id,
+                    end_id=end_id,
+                )
+                await client.send_message(
+                    chat_id=message.from_user.id,
+                    reply_parameters=ReplyParameters(message_id=message.id),
+                    text=f"✅ 转发任务已创建: 消息 {start_id}-{end_id}\n"
+                    f"💡 发送 /status 查看进度",
+                )
+                return None
+            except Exception as e:
+                log.warning(f"转发任务桥接失败，回退旧架构: {e}")
+        last_message: pyrogram.types.Message | None = None
         loading = "🚛消息转发中,请稍候..."
         try:
-            origin_meta: Union[dict, None] = await parse_link(
+            origin_meta: dict | None = await parse_link(
                 client=self.app.client, link=origin_link
             )
-            target_meta: Union[dict, None] = await parse_link(
+            target_meta: dict | None = await parse_link(
                 client=self.app.client, link=target_link
             )
             if not all([origin_meta, target_meta]):
                 raise Exception("Invalid origin_link or target_link.")
             origin_chat_id = origin_meta.get("chat_id")
             target_chat_id = target_meta.get("chat_id")
-            origin_chat: Union[pyrogram.types.Chat, None] = await get_chat_with_notify(
+            origin_chat: pyrogram.types.Chat | None = await get_chat_with_notify(
                 user_client=self.app.client,
                 bot_client=client,
                 bot_message=message,
                 chat_id=origin_chat_id,
                 error_msg=f"⬇️⬇️⬇️原始频道不存在⬇️⬇️⬇️\n{origin_link}",
             )
-            target_chat: Union[pyrogram.types.Chat, None] = await get_chat_with_notify(
+            target_chat: pyrogram.types.Chat | None = await get_chat_with_notify(
                 user_client=self.app.client,
                 bot_client=client,
                 bot_message=message,
@@ -1256,7 +1326,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                     }
                     channel = (
                         "@" + origin_chat.username
-                        if isinstance(getattr(origin_chat, "username"), str)
+                        if isinstance(origin_chat.username, str)
                         else ""
                     )
                     if (
@@ -1423,7 +1493,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         return False
 
     @staticmethod
-    def _extract_file_unique_id(message: pyrogram.types.Message) -> Union[str, None]:
+    def _extract_file_unique_id(message: pyrogram.types.Message) -> str | None:
         """从 Pyrogram Message 中提取媒体文件的 file_unique_id。
 
         按优先级依次检查 video/photo/document/audio/animation/voice/video_note 属性。
@@ -1482,9 +1552,8 @@ class TelegramRestrictedMediaDownloader(Bot):
         progress: Callable = None,
         progress_args: tuple = (),
         chunk_size: int = 1024 * 1024,
-        compare_size: Union[
-            int, None
-        ] = None,  # 不为None时,将通过大小比对判断是否为完整文件。
+        compare_size: int
+        | None = None,  # 不为None时,将通过大小比对判断是否为完整文件。
     ) -> str:
         temp_path = f"{file_name}.temp"
         if os.path.exists(file_name) and compare_size:
@@ -1587,12 +1656,12 @@ class TelegramRestrictedMediaDownloader(Bot):
 
     def get_media_meta(
         self, message: pyrogram.types.Message, dtype
-    ) -> Dict[str, Union[int, str]]:
+    ) -> dict[str, int | str]:
         """获取媒体元数据。"""
-        file_id: int = getattr(message, "id")
+        file_id: int = message.id
         temp_file_path: str = self.app.get_temp_file_path(message, dtype)
         _sever_meta = getattr(message, dtype)
-        sever_file_size: int = getattr(_sever_meta, "file_size")
+        sever_file_size: int = _sever_meta.file_size
         file_name: str = split_path(temp_file_path).get("file_name")
         save_directory: str = os.path.join(self.env_save_directory(message), file_name)
         format_file_size: str = MetaData.suitable_units_display(sever_file_size)
@@ -1607,13 +1676,13 @@ class TelegramRestrictedMediaDownloader(Bot):
 
     async def __add_task(
         self,
-        chat_id: Union[str, int],
+        chat_id: str | int,
         link_type: str,
         link: str,
-        message: Union[pyrogram.types.Message, list],
+        message: pyrogram.types.Message | list,
         retry: dict,
-        with_upload: Optional[dict] = None,
-        diy_download_type: Optional[list] = None,
+        with_upload: dict | None = None,
+        diy_download_type: list | None = None,
     ) -> None:
         retry_count = retry.get("count")
         retry_id = retry.get("id")
@@ -1778,11 +1847,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         _file_path: str = os.path.join(
             save_directory, split_path(temp_file_path).get("file_name")
         )
-        file_path: str = (
-            _file_path[: -len(temp_ext)]
-            if _file_path.endswith(temp_ext)
-            else _file_path
-        )
+        file_path: str = _file_path.removesuffix(temp_ext)
         if compare_file_size(a_size=local_file_size, b_size=sever_file_size):
             if with_move:
                 result: str = move_to_save_directory(
@@ -1812,7 +1877,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         message,
         file_path: str,
         with_upload: dict,
-    ) -> Union[dict, None]:
+    ) -> dict | None:
         """下载完成后、上传前的三级去重检查（L2/L3）。
 
         在仓库模式启用时，依次执行：
@@ -2240,10 +2305,10 @@ class TelegramRestrictedMediaDownloader(Bot):
 
     async def download_chat(
         self, chat_id: str, callback_query: pyrogram.types.CallbackQuery
-    ) -> Union[list, None]:
+    ) -> list | None:
         async def _progress(
             _text: str, _reply_markup: InlineKeyboardMarkup
-        ) -> Union[pyrogram.types.Message, None]:
+        ) -> pyrogram.types.Message | None:
             try:
                 return await callback_query.message.edit_text(
                     text=_text, reply_markup=_reply_markup
@@ -2271,7 +2336,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
         try:
             _filter = Filter()
-            download_chat_filter: Union[dict, None] = None
+            download_chat_filter: dict | None = None
             for i in self.download_chat_filter:
                 if chat_id == i:
                     download_chat_filter = self.download_chat_filter.get(chat_id)
@@ -2279,9 +2344,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 return None
             if not isinstance(download_chat_filter, dict):
                 return None
-            chat_id: Union[str, int] = (
-                int(chat_id) if chat_id.startswith("-") else chat_id
-            )
+            chat_id: str | int = int(chat_id) if chat_id.startswith("-") else chat_id
             date_filter = download_chat_filter.get("date_range")
             start_date = date_filter.get("start_date")
             end_date = date_filter.get("end_date")
@@ -2418,6 +2481,34 @@ class TelegramRestrictedMediaDownloader(Bot):
             diy_download_type: list = [_ for _ in DownloadType()]
             comment_count: int = (len(links) - message_count) if include_comment else 0
             total_count: int = message_count + comment_count
+            # 第三阶段：桥接到 TaskManager 调度（任务在 Web 端可见、可监控）。
+            # 收集到的链接统一交给 BotTaskBridge 创建下载任务并启动；
+            # 桥接失败或无 TaskManager 时回退旧架构逐条下载，保证功能不中断。
+            from module.bot.bot_bridge import BotTaskBridge
+            from module.core.integration import get_context
+
+            _bridge_ctx = get_context()
+            _task_manager = (
+                getattr(_bridge_ctx, "task_manager", None) if _bridge_ctx else None
+            )
+            if _task_manager is not None:
+                try:
+                    _bridge = BotTaskBridge(
+                        task_manager=_task_manager,
+                        client=self.app.client,
+                        config_manager=getattr(_bridge_ctx, "config_manager", None),
+                    )
+                    await _bridge.create_download_tasks_from_links(links)
+                    await _progress(
+                        _text=origin_callback_query_text,
+                        _reply_markup=KeyboardButton.single_button(
+                            text=BotButton.TASK_ASSIGN,
+                            callback_data=BotCallbackText.NULL,
+                        ),
+                    )
+                    return links
+                except Exception as e:
+                    log.warning(f"download_chat 任务桥接失败，回退旧架构: {e}")
             assigned_count: int = 0
             last_progress_update_time: float = 0  # 记录上次分配任务更新的时间戳。
             for link in links:
@@ -2482,11 +2573,11 @@ class TelegramRestrictedMediaDownloader(Bot):
     @DownloadTask.on_create_task
     async def create_download_task(
         self,
-        message_ids: Union[pyrogram.types.Message, str],
-        retry: Union[dict, None] = None,
+        message_ids: pyrogram.types.Message | str,
+        retry: dict | None = None,
         single_link: bool = False,
-        with_upload: Union[dict, None] = None,
-        diy_download_type: Optional[list] = None,
+        with_upload: dict | None = None,
+        diy_download_type: list | None = None,
     ) -> dict:
         retry = retry if retry else {"id": -1, "count": 0}
         diy_download_type = (

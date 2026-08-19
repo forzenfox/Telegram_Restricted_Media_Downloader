@@ -2,10 +2,9 @@
 """Downloader 内容保护限制降级策略测试。"""
 
 import os
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pyrogram.errors.exceptions.bad_request_400 import (
     ChatForwardsRestricted as ChatForwardsRestricted_400,
 )
@@ -29,6 +28,26 @@ class AsyncIterator:
         return item
 
 
+@pytest.fixture
+def db_path():
+    """创建临时数据库路径。"""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        yield f.name
+    # Windows 下 SQLite 异步引擎关闭后可能仍有残留连接，
+    # 导致 PermissionError，因此重试删除。
+    import time
+
+    for _ in range(5):
+        try:
+            if os.path.exists(f.name):
+                os.unlink(f.name)
+            break
+        except PermissionError:
+            time.sleep(0.1)
+
+
 class TestCheckType:
     """测试 check_type 方法。"""
 
@@ -38,7 +57,9 @@ class TestCheckType:
         with patch("module.core.download.downloader.Bot.__init__", return_value=None):
             with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import (
+                        TelegramRestrictedMediaDownloader,
+                    )
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl.app = MagicMock()
@@ -97,7 +118,9 @@ class TestContentProtectionFallback:
         with patch("module.core.download.downloader.Bot.__init__", return_value=None):
             with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import (
+                        TelegramRestrictedMediaDownloader,
+                    )
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl._commands = MagicMock()
@@ -146,29 +169,31 @@ class TestContentProtectionFallback:
         client_mock = AsyncMock()
         client_mock.me = MagicMock(id=999)
 
-        with patch(
-            "module.core.download.downloader.parse_link",
-            side_effect=[
-                {"chat_id": -100111},
-                {"chat_id": -100222},
-            ],
-        ):
-            with patch(
+        with (
+            patch(
+                "module.core.download.downloader.parse_link",
+                side_effect=[
+                    {"chat_id": -100111},
+                    {"chat_id": -100222},
+                ],
+            ),
+            patch(
                 "module.core.download.downloader.get_chat_with_notify",
                 side_effect=[
                     MagicMock(id=-100111, username="origin"),
                     MagicMock(id=-100222, username="target"),
                 ],
-            ):
-                with patch("module.core.download.downloader.get_my_id", return_value=123):
-                    await downloader.get_forward_link_from_bot(
-                        client=client_mock,
-                        message=MagicMock(
-                            from_user=MagicMock(id=123),
-                            text="/forward https://t.me/origin/1 https://t.me/target/1 1 1",
-                            id=1,
-                        ),
-                    )
+            ),
+            patch("module.core.download.downloader.get_my_id", return_value=123),
+        ):
+            await downloader.get_forward_link_from_bot(
+                client=client_mock,
+                message=MagicMock(
+                    from_user=MagicMock(id=123),
+                    text="/forward https://t.me/origin/1 https://t.me/target/1 1 1",
+                    id=1,
+                ),
+            )
 
         # 验证 send_message 被调用（至少2次：加载消息 + 文本转发）
         assert client_mock.send_message.call_count >= 2
@@ -200,29 +225,31 @@ class TestContentProtectionFallback:
         client_mock = AsyncMock()
         client_mock.me = MagicMock(id=999)
 
-        with patch(
-            "module.core.download.downloader.parse_link",
-            side_effect=[
-                {"chat_id": -100111},
-                {"chat_id": -100222},
-            ],
-        ):
-            with patch(
+        with (
+            patch(
+                "module.core.download.downloader.parse_link",
+                side_effect=[
+                    {"chat_id": -100111},
+                    {"chat_id": -100222},
+                ],
+            ),
+            patch(
                 "module.core.download.downloader.get_chat_with_notify",
                 side_effect=[
                     MagicMock(id=-100111, username="origin"),
                     MagicMock(id=-100222, username="target"),
                 ],
-            ):
-                with patch("module.core.download.downloader.get_my_id", return_value=123):
-                    await downloader.get_forward_link_from_bot(
-                        client=client_mock,
-                        message=MagicMock(
-                            from_user=MagicMock(id=123),
-                            text="/forward https://t.me/origin/1 https://t.me/target/1 1 1",
-                            id=1,
-                        ),
-                    )
+            ),
+            patch("module.core.download.downloader.get_my_id", return_value=123),
+        ):
+            await downloader.get_forward_link_from_bot(
+                client=client_mock,
+                message=MagicMock(
+                    from_user=MagicMock(id=123),
+                    text="/forward https://t.me/origin/1 https://t.me/target/1 1 1",
+                    id=1,
+                ),
+            )
 
         # 验证没有向目标频道直接 send_message（因为不是文本）
         target_calls = [
@@ -250,29 +277,31 @@ class TestContentProtectionFallback:
         client_mock = AsyncMock()
         client_mock.me = MagicMock(id=999)
 
-        with patch(
-            "module.core.download.downloader.parse_link",
-            side_effect=[
-                {"chat_id": -100111},
-                {"chat_id": -100222},
-            ],
-        ):
-            with patch(
+        with (
+            patch(
+                "module.core.download.downloader.parse_link",
+                side_effect=[
+                    {"chat_id": -100111},
+                    {"chat_id": -100222},
+                ],
+            ),
+            patch(
                 "module.core.download.downloader.get_chat_with_notify",
                 side_effect=[
                     MagicMock(id=-100111, username="origin"),
                     MagicMock(id=-100222, username="target"),
                 ],
-            ):
-                with patch("module.core.download.downloader.get_my_id", return_value=123):
-                    await downloader.get_forward_link_from_bot(
-                        client=client_mock,
-                        message=MagicMock(
-                            from_user=MagicMock(id=123),
-                            text="/forward https://t.me/origin/1 https://t.me/target/1 1 1",
-                            id=1,
-                        ),
-                    )
+            ),
+            patch("module.core.download.downloader.get_my_id", return_value=123),
+        ):
+            await downloader.get_forward_link_from_bot(
+                client=client_mock,
+                message=MagicMock(
+                    from_user=MagicMock(id=123),
+                    text="/forward https://t.me/origin/1 https://t.me/target/1 1 1",
+                    id=1,
+                ),
+            )
 
         # 验证没有向目标频道直接 send_message
         target_calls = [
@@ -295,7 +324,9 @@ class TestDownloadRangeDtype:
             with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
                     from module.app import Application
-                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import (
+                        TelegramRestrictedMediaDownloader,
+                    )
 
                     dl = TelegramRestrictedMediaDownloader()
                     real_app = Application.__new__(Application)
@@ -343,7 +374,9 @@ class TestDownloadRangeDtype:
         )
 
         with patch("module.app.get_extension", return_value="mp4"):
-            with patch("module.core.download.downloader.is_file_duplicate", return_value=False):
+            with patch(
+                "module.core.download.downloader.is_file_duplicate", return_value=False
+            ):
                 await downloader.download_range(
                     chat_id=-100123,
                     start_id=96396,
@@ -371,7 +404,9 @@ class TestDownloadRangeDtype:
         )
 
         with patch("module.app.get_extension", return_value="jpg"):
-            with patch("module.core.download.downloader.is_file_duplicate", return_value=False):
+            with patch(
+                "module.core.download.downloader.is_file_duplicate", return_value=False
+            ):
                 await downloader.download_range(
                     chat_id=-100123,
                     start_id=96396,
@@ -409,7 +444,9 @@ class TestDownloadRangeDtype:
             return str(path).endswith(".temp")
 
         with patch("module.app.get_extension", return_value="mp4"):
-            with patch("module.core.download.downloader.is_file_duplicate", return_value=False):
+            with patch(
+                "module.core.download.downloader.is_file_duplicate", return_value=False
+            ):
                 with patch("os.path.exists", side_effect=_fake_exists):
                     await downloader.download_range(
                         chat_id=-100123,
@@ -438,7 +475,9 @@ class TestResumeDownloadProgress:
         with patch("module.core.download.downloader.Bot.__init__", return_value=None):
             with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import (
+                        TelegramRestrictedMediaDownloader,
+                    )
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl.app = MagicMock()
@@ -477,7 +516,9 @@ class TestInitRepositoryManager:
         with patch("module.core.download.downloader.Bot.__init__", return_value=None):
             with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import (
+                        TelegramRestrictedMediaDownloader,
+                    )
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl.app = MagicMock()
@@ -491,9 +532,10 @@ class TestInitRepositoryManager:
         }
         mock_repo_manager = MagicMock()
 
-        with patch("module.core.integration.get_context", return_value=MagicMock(
-            repository_manager=mock_repo_manager
-        )):
+        with patch(
+            "module.core.integration.get_context",
+            return_value=MagicMock(repository_manager=mock_repo_manager),
+        ):
             downloader._init_repository_manager()
 
         assert downloader.repository_manager is mock_repo_manager
@@ -507,12 +549,18 @@ class TestInitRepositoryManager:
 
         with patch("module.core.integration.get_context", return_value=None):
             with patch("module.core.repository.db.RepositoryDB") as MockRepoDB:
-                with patch("module.core.repository.manager.RepositoryManager") as MockRepoMgr:
+                with patch(
+                    "module.core.repository.manager.RepositoryManager"
+                ) as _MockRepoMgr:
                     downloader._init_repository_manager()
 
         # 验证 db_path 使用了 resolved_data_directory
         call_args = MockRepoDB.call_args
-        db_path = call_args.kwargs.get("db_path") or call_args[1].get("db_path") or call_args[0][0]
+        db_path = (
+            call_args.kwargs.get("db_path")
+            or call_args[1].get("db_path")
+            or call_args[0][0]
+        )
         assert "repository.db" in db_path
         assert str(tmp_path / ".trmd") in db_path
 
@@ -530,9 +578,7 @@ class TestInitRepositoryManager:
 
     def test_empty_chat_id_skips_init(self, downloader):
         """仓库启用但 chat_id 为空时，应跳过初始化。"""
-        downloader.app.config = {
-            "repository": {"enabled": True, "chat_id": ""}
-        }
+        downloader.app.config = {"repository": {"enabled": True, "chat_id": ""}}
         downloader._init_repository_manager()
         assert downloader.repository_manager is None
 
@@ -556,3 +602,160 @@ class TestSessionDirectoryPaths:
         result = resolve_data_directory("./.trmd", project_root)
         expected = os.path.normpath(os.path.join(project_root, ".trmd"))
         assert result == expected
+
+
+class TestDownloadChatBridge:
+    """测试 download_chat 执行阶段桥接到 TaskManager 创建任务。"""
+
+    @pytest.fixture
+    def downloader(self):
+        """构造带 Mock 依赖的 Downloader 实例（仅 mock 收集阶段）。"""
+        with patch("module.core.download.downloader.Bot.__init__", return_value=None):
+            with patch("module.core.download.downloader.Application"):
+                with patch("asyncio.get_event_loop"):
+                    from module.core.download.downloader import (
+                        TelegramRestrictedMediaDownloader,
+                    )
+
+                    dl = TelegramRestrictedMediaDownloader()
+                    dl._state = MagicMock()
+                    dl.app = MagicMock()
+                    dl.app.client = AsyncMock()
+                    dl.app.config = {"preference": {}}
+                    dl.uploader = None
+                    dl.pb = MagicMock()
+                    dl.download_chat_filter = {
+                        "123": {
+                            "date_range": {
+                                "start_date": None,
+                                "end_date": None,
+                            },
+                            "download_type": {
+                                "video": True,
+                                "photo": True,
+                                "audio": True,
+                                "document": True,
+                                "voice": True,
+                                "animation": True,
+                                "video_note": True,
+                            },
+                            "keyword": {},
+                            "comment": False,
+                        }
+                    }
+                    dl.check_type = MagicMock(return_value=True)
+                    return dl
+
+    @pytest.mark.asyncio
+    async def test_download_chat_bridges_to_task_manager(self, downloader, db_path):
+        """download_chat 收集后应桥接创建 TaskManager 下载任务。"""
+        from module.core import db
+        from module.core.identifier_service import IdentifierService, ResolvedChat
+        from module.core.task.manager import TaskManager, TaskType
+
+        await db.init_db(db_path)
+        identifier_service = MagicMock(spec=IdentifierService)
+
+        async def _resolve(identifier: str):
+            return ResolvedChat(
+                chat_id=-1001234567890,
+                chat_type="channel",
+                chat_name="Test",
+                username="test",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+
+        identifier_service.resolve = AsyncMock(side_effect=_resolve)
+        tm = TaskManager(max_concurrent_tasks=2, identifier_service=identifier_service)
+        try:
+            # 构造一条匹配消息
+            msg = MagicMock()
+            msg.media_group_id = None
+            msg.link = "https://t.me/channel/123"
+            msg.id = 123
+
+            async def _chat_history(*args, **kwargs):
+                yield msg
+
+            downloader.app.client.get_chat_history = _chat_history
+            downloader.app.client.get_discussion_replies = AsyncMock()
+
+            mock_filter = MagicMock()
+            mock_filter.date_range = MagicMock(return_value=True)
+            mock_filter.dtype = MagicMock(return_value=True)
+            mock_filter.keyword_filter = MagicMock(return_value=True)
+
+            cq = MagicMock()
+            cq.message.text = "channel: 123"
+            cq.message.edit_text = AsyncMock(return_value=cq.message)
+
+            ctx_mock = MagicMock()
+            ctx_mock.task_manager = tm
+            ctx_mock.config_manager = MagicMock(save_directory="./downloads")
+
+            with (
+                patch(
+                    "module.core.integration.get_context",
+                    return_value=ctx_mock,
+                ),
+                patch(
+                    "module.core.download.downloader.Filter",
+                    return_value=mock_filter,
+                ),
+                patch("module.core.download.downloader.KeyboardButton") as kb,
+            ):
+                kb.single_button = MagicMock(return_value=MagicMock())
+                await downloader.download_chat("123", cq)
+
+            # 验证 TaskManager 中创建了下载任务
+            tasks, total = await tm.list_tasks(limit=10)
+            assert total == 1
+            assert tasks[0].task_type == TaskType.DOWNLOAD
+        finally:
+            await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_download_chat_falls_back_without_task_manager(self, downloader):
+        """无 TaskManager 时 download_chat 应回退旧架构逐条下载。"""
+
+        msg = MagicMock()
+        msg.media_group_id = None
+        msg.link = "https://t.me/channel/123"
+        msg.id = 123
+
+        async def _chat_history(*args, **kwargs):
+            yield msg
+
+        downloader.app.client.get_chat_history = _chat_history
+        downloader.app.client.get_discussion_replies = AsyncMock()
+
+        mock_filter = MagicMock()
+        mock_filter.date_range = MagicMock(return_value=True)
+        mock_filter.dtype = MagicMock(return_value=True)
+        mock_filter.keyword_filter = MagicMock(return_value=True)
+
+        cq = MagicMock()
+        cq.message.text = "channel: 123"
+        cq.message.edit_text = AsyncMock(return_value=cq.message)
+
+        # 无 task_manager（get_context 返回无 task_manager 的 ctx）
+        ctx_mock = MagicMock()
+        ctx_mock.task_manager = None
+
+        downloader.create_download_task = AsyncMock(
+            return_value={"status": "downloading"}
+        )
+
+        with (
+            patch("module.core.integration.get_context", return_value=ctx_mock),
+            patch("module.core.download.downloader.Filter", return_value=mock_filter),
+            patch("module.core.download.downloader.KeyboardButton") as kb,
+        ):
+            kb.single_button = MagicMock(return_value=MagicMock())
+            await downloader.download_chat("123", cq)
+
+        # 回退旧架构：create_download_task 被调用
+        downloader.create_download_task.assert_called()
