@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 - 话题分类配置</title>
+<style>
+:root {
+  --bg: #F8FAFC; --bg2: #FFFFFF; --ink: #1E293B; --muted: #64748B;
+  --rule: #E2E8F0; --accent: #0EA5E9; --accent2: #8B5CF6;
+  --accent-grad: linear-gradient(135deg, #0EA5E9, #8B5CF6);
+  --success: #10B981; --warning: #F59E0B; --danger: #EF4444;
+  --radius: 12px; --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.7; color: var(--ink); background: var(--bg);
+  background-image: radial-gradient(circle at 15% 10%, rgba(14,165,233,0.07), transparent 40%), radial-gradient(circle at 85% 90%, rgba(139,92,246,0.07), transparent 40%);
+  min-height: 100vh; padding: 2rem 1rem;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+.proto-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 1rem; }
+h4 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.5rem; color: var(--accent); }
+.card { background: rgba(255,255,255,0.75); backdrop-filter: blur(10px); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.5rem; box-shadow: 0 1px 3px rgba(14,165,233,0.08), 0 4px 12px rgba(14,165,233,0.06); }
+.proto-toggle { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.switch { position: relative; width: 44px; height: 24px; background: var(--rule); border-radius: 12px; cursor: pointer; transition: background 0.2s; }
+.switch.on { background: var(--accent); }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: white; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.switch.on::after { transform: translateX(20px); }
+.proto-field { margin-bottom: 0.75rem; }
+.proto-field label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--ink); margin-bottom: 0.25rem; }
+.proto-field input, .proto-field select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); font-size: 0.88rem; background: white; color: var(--ink); }
+.proto-field input:focus, .proto-field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,0.1); }
+.proto-btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 1rem; background: var(--accent-grad); color: white; border: none; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.proto-btn:hover { opacity: 0.9; }
+.proto-btn.outline { background: white; color: var(--accent); border: 1px solid var(--accent); }
+.proto-btn.danger { background: white; color: var(--danger); border: 1px solid var(--danger); }
+.proto-btn.sm { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
+.proto-cat-table { width: 100%; margin-top: 0.75rem; font-size: 0.82rem; border-collapse: collapse; }
+.proto-cat-table th { background: rgba(14,165,233,0.06); padding: 0.5rem; text-align: left; font-weight: 600; border-bottom: 1px solid var(--rule); }
+.proto-cat-table td { padding: 0.5rem; border-bottom: 1px solid var(--rule); }
+.proto-topic-badge { display: inline-block; padding: 0.15rem 0.5rem; background: rgba(139,92,246,0.1); color: var(--accent2); border-radius: 4px; font-size: 0.78rem; font-weight: 600; font-family: monospace; }
+.proto-disabled { opacity: 0.45; pointer-events: none; }
+.callout { border-left: 4px solid var(--accent); background: rgba(14,165,233,0.04); padding: 0.75rem 1rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; margin: 1rem 0; font-size: 0.9rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+@media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="proto-label">交互原型 — 话题分类配置页面</div>
+<div class="card">
+  <div class="proto-toggle">
+    <div class="switch on" id="topicsSwitch" onclick="toggleSwitch()"></div>
+    <span style="font-size:0.9rem;font-weight:600;">Topics 话题分类模式</span>
+  </div>
+
+  <div id="topicsConfig">
+    <div class="grid2">
+      <div class="proto-field">
+        <label>仓库超级群 Chat ID</label>
+        <input type="text" value="-1001234567890" placeholder="-100xxxxxxxxxx">
+      </div>
+      <div class="proto-field">
+        <label>默认话题 ID</label>
+        <input type="number" value="1" placeholder="1">
+      </div>
+    </div>
+    <button class="proto-btn outline sm" onclick="discoverTopics()" style="margin-bottom:1rem;">发现话题</button>
+    <div id="discoverResult" style="display:none;font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem;"></div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+      <h4 style="margin:0;">分类列表</h4>
+      <button class="proto-btn sm" onclick="addCategory()">+ 添加分类</button>
+    </div>
+
+    <div style="overflow-x:auto;border-radius:var(--radius-sm);border:1px solid var(--rule);">
+      <table class="proto-cat-table">
+        <thead>
+          <tr><th>分类名称</th><th>话题 ID</th><th>匹配规则</th><th>操作</th></tr>
+        </thead>
+        <tbody id="catTableBody">
+          <tr>
+            <td>电视剧</td>
+            <td><span class="proto-topic-badge">123</span></td>
+            <td>来源频道 + 文件名正则</td>
+            <td><button class="proto-btn outline sm">编辑</button> <button class="proto-btn danger sm">删除</button></td>
+          </tr>
+          <tr>
+            <td>漫画</td>
+            <td><span class="proto-topic-badge">456</span></td>
+            <td>来源频道</td>
+            <td><button class="proto-btn outline sm">编辑</button> <button class="proto-btn danger sm">删除</button></td>
+          </tr>
+          <tr>
+            <td>模特A</td>
+            <td><span class="proto-topic-badge">789</span></td>
+            <td>来源频道</td>
+            <td><button class="proto-btn outline sm">编辑</button> <button class="proto-btn danger sm">删除</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:1rem;">
+    当 Topics 模式关闭时，系统回退到单一频道行为，所有文件上传到 repository.chat_id，不传递 message_thread_id。
+  </div>
+</div>
+</div>
+
+<script>
+function toggleSwitch() {
+  var sw = document.getElementById('topicsSwitch');
+  var config = document.getElementById('topicsConfig');
+  sw.classList.toggle('on');
+  if (sw.classList.contains('on')) {
+    config.classList.remove('proto-disabled');
+  } else {
+    config.classList.add('proto-disabled');
+  }
+}
+function discoverTopics() {
+  var result = document.getElementById('discoverResult');
+  result.style.display = 'block';
+  result.innerHTML = '已发现 4 个话题：General (ID:1)、电视剧 (ID:123)、漫画 (ID:456)、模特A (ID:789)';
+}
+function addCategory() {
+  alert('打开分类编辑弹窗：填写分类名称、话题 ID、匹配规则');
+}
+</script>
+</body>
+</html>

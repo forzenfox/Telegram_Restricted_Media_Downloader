@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 - 话题同步状态面板</title>
+<style>
+:root {
+  --bg: #F8FAFC; --bg2: #FFFFFF; --ink: #1E293B; --muted: #64748B;
+  --rule: #E2E8F0; --accent: #0EA5E9; --accent2: #8B5CF6;
+  --accent-grad: linear-gradient(135deg, #0EA5E9, #8B5CF6);
+  --success: #10B981; --warning: #F59E0B; --danger: #EF4444;
+  --radius: 12px; --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.7; color: var(--ink); background: var(--bg);
+  background-image: radial-gradient(circle at 15% 10%, rgba(14,165,233,0.07), transparent 40%), radial-gradient(circle at 85% 90%, rgba(139,92,246,0.07), transparent 40%);
+  min-height: 100vh; padding: 2rem 1rem;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+.proto-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 1rem; }
+h4 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.5rem; color: var(--accent); }
+.card { background: rgba(255,255,255,0.75); backdrop-filter: blur(10px); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.5rem; box-shadow: 0 1px 3px rgba(14,165,233,0.08), 0 4px 12px rgba(14,165,233,0.06); }
+.proto-btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 1rem; background: var(--accent-grad); color: white; border: none; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.proto-btn:hover { opacity: 0.9; }
+.proto-btn.outline { background: white; color: var(--accent); border: 1px solid var(--accent); }
+.proto-btn.sm { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
+.proto-sync-row { display: flex; align-items: center; gap: 1rem; padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--rule); font-size: 0.85rem; }
+.proto-sync-row:last-child { border-bottom: none; }
+.proto-sync-name { font-weight: 600; min-width: 100px; }
+.proto-sync-bar { flex: 1; height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+.proto-sync-bar-fill { height: 100%; background: var(--accent-grad); border-radius: 3px; transition: width 0.3s; }
+.proto-sync-count { font-size: 0.78rem; color: var(--muted); min-width: 80px; text-align: right; }
+.proto-sync-status { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
+.proto-sync-status.synced { background: rgba(16,185,129,0.1); color: var(--success); }
+.proto-sync-status.pending { background: rgba(245,158,11,0.1); color: var(--warning); }
+.sync-list { border: 1px solid var(--rule); border-radius: var(--radius-sm); overflow: hidden; }
+.header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="proto-label">交互原型 — 话题同步状态面板</div>
+<div class="card">
+  <div class="header-bar">
+    <h4 style="margin:0;">话题同步状态</h4>
+    <button class="proto-btn sm" onclick="syncAll()">全部同步</button>
+  </div>
+  <div class="sync-list">
+    <div class="proto-sync-row">
+      <span class="proto-sync-name">General</span>
+      <div class="proto-sync-bar"><div class="proto-sync-bar-fill" style="width:100%;"></div></div>
+      <span class="proto-sync-count">128 文件</span>
+      <span class="proto-sync-status synced">已同步</span>
+      <button class="proto-btn outline sm">同步</button>
+    </div>
+    <div class="proto-sync-row">
+      <span class="proto-sync-name">电视剧</span>
+      <div class="proto-sync-bar"><div class="proto-sync-bar-fill" style="width:100%;"></div></div>
+      <span class="proto-sync-count">456 文件</span>
+      <span class="proto-sync-status synced">已同步</span>
+      <button class="proto-btn outline sm">同步</button>
+    </div>
+    <div class="proto-sync-row">
+      <span class="proto-sync-name">漫画</span>
+      <div class="proto-sync-bar"><div class="proto-sync-bar-fill" style="width:65%;"></div></div>
+      <span class="proto-sync-count">203 文件</span>
+      <span class="proto-sync-status pending">同步中</span>
+      <button class="proto-btn outline sm">同步</button>
+    </div>
+    <div class="proto-sync-row">
+      <span class="proto-sync-name">模特A</span>
+      <div class="proto-sync-bar"><div class="proto-sync-bar-fill" style="width:100%;"></div></div>
+      <span class="proto-sync-count">87 文件</span>
+      <span class="proto-sync-status synced">已同步</span>
+      <button class="proto-btn outline sm">同步</button>
+    </div>
+  </div>
+  <div style="margin-top:0.75rem;font-size:0.82rem;color:var(--muted);">
+    同步按话题独立执行，每个话题维护各自的 last_synced_message_id。
+  </div>
+</div>
+</div>
+
+<script>
+function syncAll() {
+  alert('开始同步所有话题...');
+}
+</script>
+</body>
+</html>
