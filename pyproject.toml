@@ -60,7 +60,20 @@ asyncio_mode = "auto"
 # - B006、B023、TRY201、TRY203、RUF012、RUF013、SIM102、SIM103: 需人工判断的语义类告警
 "module/api/routes/tasks.py" = ["B008", "BLE001"]
 "module/core/download/client.py" = ["B006", "B008", "B023", "BLE001", "RUF013", "SIM102", "TRY201", "TRY203"]
+# downloader.py：旧架构遗留语义告警（盲捕获/时区/裸异常/隐式 Optional 等），
+# 属历史存量，非本次桥接改动引入，按项目约定以 per-file 方式忽略
+"module/core/download/downloader.py" = ["ASYNC230", "BLE001", "C401", "C403", "DTZ006", "DTZ007", "RUF013", "S110", "SIM102", "SIM113", "TRY002"]
+# bot_bridge.py：桥接边界捕获 Exception 收集失败链接（与 integration.py 约定一致）
+"module/bot/bot_bridge.py" = ["BLE001"]
+# executor.py：旧架构遗留语义/风格告警（盲捕获/隐式 Optional/时区写法等），
+# 属历史存量，非本次桥接改动引入，按项目约定以 per-file 方式忽略
+"module/core/task/executor.py" = ["B023", "BLE001", "RUF019", "S110", "UP017", "UP035", "UP045"]
 "module/core/integration.py" = ["BLE001", "S110"]
 "module/core/task/manager.py" = ["RUF012", "SIM103"]
 "tests/unit/api/test_web_api.py" = ["RUF059"]
+"tests/unit/bot/test_bot_bridge.py" = ["RUF059"]
+"tests/unit/core/task/test_executor.py" = ["I001", "RUF015", "UP017"]
 "tests/unit/core/task/test_manager.py" = ["RUF059"]
+# test_downloader.py：嵌套 with 属存量测试风格（ruff 无法自动合并含 as 绑定的上下文），
+# 按项目约定以 per-file 方式忽略
+"tests/unit/core/download/test_downloader.py" = ["SIM117"]

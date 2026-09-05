@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 - 仓库浏览页面</title>
+<style>
+:root {
+  --bg: #F8FAFC; --bg2: #FFFFFF; --ink: #1E293B; --muted: #64748B;
+  --rule: #E2E8F0; --accent: #0EA5E9; --accent2: #8B5CF6;
+  --accent-grad: linear-gradient(135deg, #0EA5E9, #8B5CF6);
+  --success: #10B981; --warning: #F59E0B; --danger: #EF4444;
+  --radius: 12px; --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.7; color: var(--ink); background: var(--bg);
+  background-image: radial-gradient(circle at 15% 10%, rgba(14,165,233,0.07), transparent 40%), radial-gradient(circle at 85% 90%, rgba(139,92,246,0.07), transparent 40%);
+  min-height: 100vh; padding: 2rem 1rem;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+.proto-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 1rem; }
+.card { background: rgba(255,255,255,0.75); backdrop-filter: blur(10px); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.5rem; box-shadow: 0 1px 3px rgba(14,165,233,0.08), 0 4px 12px rgba(14,165,233,0.06); }
+.proto-btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 1rem; background: var(--accent-grad); color: white; border: none; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.proto-btn:hover { opacity: 0.9; }
+.proto-btn.outline { background: white; color: var(--accent); border: 1px solid var(--accent); }
+.proto-btn.sm { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
+.proto-filter-bar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.proto-filter-bar select, .proto-filter-bar input { padding: 0.4rem 0.75rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); font-size: 0.85rem; background: white; }
+.proto-filter-bar input { flex: 1; min-width: 120px; }
+.proto-file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
+.proto-file-card { border: 1px solid var(--rule); border-radius: var(--radius-sm); overflow: hidden; background: white; cursor: pointer; transition: box-shadow 0.15s; }
+.proto-file-card:hover { box-shadow: 0 2px 8px rgba(14,165,233,0.12); }
+.proto-file-thumb { height: 80px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; background: rgba(14,165,233,0.04); }
+.proto-file-info { padding: 0.4rem 0.5rem; }
+.proto-file-name { font-size: 0.78rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proto-file-topic { font-size: 0.7rem; color: var(--accent2); margin-top: 0.15rem; }
+.proto-file-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,0.15); }
+.stat-line { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.75rem; }
+.action-bar { margin-top: 0.75rem; display: flex; gap: 0.5rem; }
+@media (max-width: 600px) { .proto-file-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="proto-label">交互原型 — 仓库浏览页面</div>
+<div class="card">
+  <div class="proto-filter-bar">
+    <select id="topicFilter" onchange="filterFiles()">
+      <option value="all">全部话题</option>
+      <option value="1">General (128)</option>
+      <option value="123" selected>电视剧 (456)</option>
+      <option value="456">漫画 (203)</option>
+      <option value="789">模特A (87)</option>
+    </select>
+    <select>
+      <option>全部类型</option>
+      <option>视频</option>
+      <option>图片</option>
+      <option>文档</option>
+    </select>
+    <input type="text" placeholder="搜索文件名...">
+  </div>
+  <div class="stat-line" id="statLine">
+    话题「电视剧」— 456 个文件，总计 12.3 GB
+  </div>
+  <div class="proto-file-grid" id="fileGrid">
+    <div class="proto-file-card" onclick="selectFile(this)">
+      <div class="proto-file-thumb">🎬</div>
+      <div class="proto-file-info">
+        <div class="proto-file-name">ShowName_EP01.mp4</div>
+        <div class="proto-file-topic">电视剧 · 1.2GB</div>
+      </div>
+    </div>
+    <div class="proto-file-card" onclick="selectFile(this)">
+      <div class="proto-file-thumb">🎬</div>
+      <div class="proto-file-info">
+        <div class="proto-file-name">ShowName_EP02.mp4</div>
+        <div class="proto-file-topic">电视剧 · 1.1GB</div>
+      </div>
+    </div>
+    <div class="proto-file-card" onclick="selectFile(this)">
+      <div class="proto-file-thumb">🎬</div>
+      <div class="proto-file-info">
+        <div class="proto-file-name">ShowName_EP03.mp4</div>
+        <div class="proto-file-topic">电视剧 · 1.3GB</div>
+      </div>
+    </div>
+    <div class="proto-file-card" onclick="selectFile(this)">
+      <div class="proto-file-thumb">🎬</div>
+      <div class="proto-file-info">
+        <div class="proto-file-name">AnotherShow_S01E01.mkv</div>
+        <div class="proto-file-topic">电视剧 · 2.1GB</div>
+      </div>
+    </div>
+    <div class="proto-file-card" onclick="selectFile(this)">
+      <div class="proto-file-thumb">🎬</div>
+      <div class="proto-file-info">
+        <div class="proto-file-name">AnotherShow_S01E02.mkv</div>
+        <div class="proto-file-topic">电视剧 · 2.0GB</div>
+      </div>
+    </div>
+    <div class="proto-file-card" onclick="selectFile(this)">
+      <div class="proto-file-thumb">🎬</div>
+      <div class="proto-file-info">
+        <div class="proto-file-name">Drama_第1集.mp4</div>
+        <div class="proto-file-topic">电视剧 · 0.9GB</div>
+      </div>
+    </div>
+  </div>
+  <div class="action-bar" id="actionBar" style="display:none;">
+    <button class="proto-btn outline sm">复制链接</button>
+    <button class="proto-btn outline sm">重新分类</button>
+    <button class="proto-btn outline sm" style="color:var(--danger);border-color:var(--danger);">删除</button>
+  </div>
+</div>
+</div>
+
+<script>
+function filterFiles() {
+  var filter = document.getElementById('topicFilter');
+  var selected = filter.options[filter.selectedIndex];
+  var text = selected.text;
+  var name = text.split(' (')[0];
+  var count = text.match(/\((\d+)/);
+  document.getElementById('statLine').textContent = '话题「' + name + '」— ' + (count ? count[1] : '0') + ' 个文件';
+}
+
+function selectFile(el) {
+  var cards = document.querySelectorAll('.proto-file-card');
+  cards.forEach(function(c) { c.classList.remove('selected'); });
+  el.classList.add('selected');
+  document.getElementById('actionBar').style.display = 'flex';
+}
+</script>
+</body>
+</html>

@@ -18,6 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+from pyrogram.errors.exceptions.bad_request_400 import (
+    ChatForwardsRestricted as ChatForwardsRestricted_400,
+)
 
 from module.core.task.executor import TaskExecutor
 from module.core.task.manager import (
@@ -649,7 +652,15 @@ class TestExecuteDownload:
         mock_message.media_group_id = None
         mock_message.media = True
         # _extract_file_unique_id 直接读取 message 的属性
-        for attr in ("video", "photo", "document", "audio", "animation", "voice", "video_note"):
+        for attr in (
+            "video",
+            "photo",
+            "document",
+            "audio",
+            "animation",
+            "voice",
+            "video_note",
+        ):
             setattr(mock_message, attr, None)
         mock_client.get_messages.return_value = mock_message
 
@@ -3062,7 +3073,15 @@ class TestDownloadFallbackNoFalseSuccess:
         mock_msg = MagicMock()
         mock_msg.media_group_id = None
         mock_msg.media = True
-        for attr in ("video", "photo", "document", "audio", "animation", "voice", "video_note"):
+        for attr in (
+            "video",
+            "photo",
+            "document",
+            "audio",
+            "animation",
+            "voice",
+            "video_note",
+        ):
             setattr(mock_msg, attr, None)
         mock_client.get_messages = AsyncMock(return_value=mock_msg)
 
@@ -3158,6 +3177,7 @@ class TestDownloadIngestion:
 
         # 模拟 FileManager 返回的 FileInfo，使 _ingest_downloaded_group 能匹配到 item
         from module.utils.path_tool import from_portable_path
+
         expected_abs_path = from_portable_path(
             "/downloads/test_photo.jpg", executor._get_save_root()
         )
@@ -3624,3 +3644,110 @@ class TestForwardIngestion:
         call_kwargs = mock_repository_manager.on_upload_success.call_args
         assert call_kwargs[1]["source_chat_id"] == -1001234567890
         assert call_kwargs[1]["source_message_id"] == 100
+
+
+# ============================================================
+# 测试：受限转发降级（内容保护频道 → 下载后上传）
+# ============================================================
+
+
+class TestForwardRestrictedFallback:
+    """测试转发遇到受限（内容保护）时降级为下载后上传。"""
+
+    @pytest.mark.asyncio
+    async def test_forward_restricted_falls_back_to_download_upload(
+        self, task_manager, mock_client, mock_downloader, mock_file_manager
+    ):
+        """copy_message 抛受限异常时，应下载消息媒体后上传到目标。"""
+        from module.core.download.file_manager import UploadResult
+
+        # 模拟受限转发异常
+        mock_client.copy_message = AsyncMock(
+            side_effect=ChatForwardsRestricted_400(
+                value={
+                    "rpc_error_code": 400,
+                    "description": "Can't forward messages from a protected chat",
+                }
+            )
+        )
+        # 降级下载成功
+        mock_downloader.download_range = AsyncMock(
+            return_value=(["/downloads/protected.mp4"], {})
+        )
+        # 上传成功
+        mock_file_manager.upload = AsyncMock(
+            return_value=UploadResult(
+                success=True,
+                message=MagicMock(id=999),
+                error_msg=None,
+            )
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+            downloader=mock_downloader,
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "range_mode": "id_range",
+                "min_id": 100,
+                "max_id": 100,
+                "target_chat_id": -1009998887777,
+            },
+        )
+        await task_manager.start_task(task.task_id)
+
+        with patch.object(executor, "_get_save_root", return_value="/downloads"):
+            await executor.execute_task(task)
+
+        # 降级下载被触发
+        mock_downloader.download_range.assert_called_once()
+        # 上传到目标频道
+        upload_call = mock_file_manager.upload.call_args
+        assert upload_call[1]["chat_id"] == -1009998887777
+        # 子任务标记为成功并记录上传消息 ID
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.status == TaskStatus.COMPLETED
+        item = updated.items[0]
+        assert item.status == ItemStatus.SUCCESS
+        assert item.uploaded_message_id == 999
+
+    @pytest.mark.asyncio
+    async def test_forward_restricted_without_downloader_marks_failed(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """受限转发且无 downloader 时，子任务应标记为 FAILED。"""
+        mock_client.copy_message = AsyncMock(
+            side_effect=ChatForwardsRestricted_400(
+                value={"rpc_error_code": 400, "description": "protected chat"}
+            )
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+            downloader=None,  # 无 downloader，无法降级
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "range_mode": "id_range",
+                "min_id": 100,
+                "max_id": 100,
+                "target_chat_id": -1009998887777,
+            },
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.status == TaskStatus.FAILED
+        assert updated.items[0].status == ItemStatus.FAILED

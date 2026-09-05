@@ -49,9 +49,11 @@ class AppContext:
         if hasattr(self, "_initialized") and self._initialized:
             return
 
-        self.data_dir = data_dir or os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".trmd"
+        # 项目根（module/core/integration.py 上三级，与 constants.WORK_DIR 一致）
+        _project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
+        self.data_dir = data_dir or os.path.join(_project_root, ".trmd")
         os.makedirs(self.data_dir, exist_ok=True)
 
         self.root_user_id = root_user_id
@@ -332,10 +334,11 @@ def init_context(**kwargs) -> AppContext:
     """初始化应用上下文。"""
     # 若未显式传入 data_dir，尝试从 config.yaml 读取
     if "data_dir" not in kwargs or kwargs["data_dir"] is None:
-        _config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
+        # 项目根（module/core/integration.py 上三级，与 constants.WORK_DIR 一致）
+        _project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _config_path = os.path.join(_project_root, "config.yaml")
         try:
             import yaml
 

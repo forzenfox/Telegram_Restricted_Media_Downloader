@@ -10,7 +10,8 @@ services:
     volumes:
       - ./config/config.yaml:/app/config.yaml:ro
       - ./data/.trmd:/app/.trmd
-      - ./logs:/app/module/logs
+      # 日志（目录挂载，自动持久化日志与轮转/备份文件）
+      - ./logs:/app/logs
       - ./sessions:/app/sessions
       - ./downloads:/app/downloads
       - ./temp:/app/temp

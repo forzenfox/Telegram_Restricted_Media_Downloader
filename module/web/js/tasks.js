@@ -680,8 +680,8 @@ class TaskManager {
       errors.push("请输入目标频道");
     }
 
-    // 验证消息范围
-    if (form.taskType !== "upload") {
+    // 验证消息范围（监听任务无需消息范围，与 HTML 显示逻辑一致）
+    if (form.taskType !== "upload" && !form.taskType.startsWith("listen_")) {
       if (form.messageRangeMode === "date_range") {
         if (!form.startDate || !form.endDate) {
           errors.push("请选择日期范围");

@@ -4,33 +4,38 @@
 桥接 TaskManager 与实际下载/上传逻辑，负责任务的实际执行和进度回调。
 """
 
-import os
 import asyncio
-import logging
 import concurrent.futures
+import logging
+import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Any, Callable
+from typing import Any, Callable, Optional
 
 import pyrogram
+from pyrogram.errors.exceptions.bad_request_400 import (
+    ChatForwardsRestricted as ChatForwardsRestricted_400,
+)
+from pyrogram.errors.exceptions.not_acceptable_406 import (
+    ChatForwardsRestricted as ChatForwardsRestricted_406,
+)
 from pyrogram.handlers import MessageHandler
 
 from module.core.config_manager import ConfigManager
-
+from module.core.download.file_manager import FileInfo, FileManager, UploadProgress
 from module.core.task.manager import (
-    TaskManager,
+    ExecutorError,
+    ItemStatus,
     Task,
     TaskItem,
-    TaskType,
+    TaskManager,
     TaskStatus,
-    ItemStatus,
-    ExecutorError,
+    TaskType,
 )
-from module.core.download.file_manager import FileManager, UploadProgress, FileInfo
 from module.utils.path_tool import (
+    from_portable_path,
     safe_scan_directory_file,
     to_portable_path,
-    from_portable_path,
 )
 from module.utils.timezone import parse_user_date
 
@@ -1579,11 +1584,25 @@ class TaskExecutor:
                             return
 
                     # 非仓库模式：直接转发到目标频道
-                    result_message = await self._client.copy_message(
-                        chat_id=target_chat_id,
-                        from_chat_id=chat_id,
-                        message_id=item.source_message_id,
-                    )
+                    # 受限转发（内容保护频道）时降级为下载后上传
+                    try:
+                        result_message = await self._client.copy_message(
+                            chat_id=target_chat_id,
+                            from_chat_id=chat_id,
+                            message_id=item.source_message_id,
+                        )
+                    except (ChatForwardsRestricted_400, ChatForwardsRestricted_406):
+                        uploaded_msg_id = await self._download_then_upload_forward(
+                            task, item, chat_id, target_chat_id
+                        )
+                        await self._task_manager.update_item_status(
+                            task.task_id,
+                            item.id,
+                            ItemStatus.SUCCESS,
+                            target_chat_id=target_chat_id,
+                            uploaded_message_id=uploaded_msg_id,
+                        )
+                        return
                     await self._task_manager.update_item_status(
                         task.task_id,
                         item.id,
@@ -1605,6 +1624,47 @@ class TaskExecutor:
                     )
 
         await asyncio.gather(*[_forward_one(item) for item in task.items])
+
+    async def _download_then_upload_forward(
+        self,
+        task: Task,
+        item: TaskItem,
+        chat_id: int,
+        target_chat_id: int,
+    ) -> int | None:
+        """受限转发降级：下载消息媒体后上传到目标频道。
+
+        内容保护频道禁止 copy_message 转发，改为"下载后上传"，
+        与旧架构 BOT /forward 的受限降级行为一致。
+        """
+        if self._downloader is None:
+            raise ExecutorError("受限转发降级需要 downloader 支持")
+
+        # 1. 下载该消息的媒体文件
+        downloaded_files, _ = await self._downloader.download_range(
+            chat_id=chat_id,
+            start_id=item.source_message_id,
+            end_id=item.source_message_id,
+            task_id=task.task_id,
+            progress_callback=self._on_item_progress,
+            message_ids=[item.source_message_id],
+        )
+        if not downloaded_files:
+            raise ExecutorError("受限转发降级：未能下载任何媒体文件")
+
+        # 2. 上传到目标频道
+        uploaded_msg_id: int | None = None
+        for file_path in downloaded_files:
+            upload_result = await self._file_manager.upload(
+                file_path=file_path,
+                chat_id=target_chat_id,
+                delete_after=task.params.get("delete_after_upload", False),
+                source_chat_id=chat_id,
+                source_message_id=item.source_message_id,
+            )
+            if upload_result and getattr(upload_result, "message", None):
+                uploaded_msg_id = upload_result.message.id
+        return uploaded_msg_id
 
     async def _execute_upload(self, task: Task) -> None:
         """执行上传任务。"""

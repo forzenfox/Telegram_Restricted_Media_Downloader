@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 - 任务创建话题指定</title>
+<style>
+:root {
+  --bg: #F8FAFC; --bg2: #FFFFFF; --ink: #1E293B; --muted: #64748B;
+  --rule: #E2E8F0; --accent: #0EA5E9; --accent2: #8B5CF6;
+  --accent-grad: linear-gradient(135deg, #0EA5E9, #8B5CF6);
+  --success: #10B981; --warning: #F59E0B; --danger: #EF4444;
+  --radius: 12px; --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.7; color: var(--ink); background: var(--bg);
+  background-image: radial-gradient(circle at 15% 10%, rgba(14,165,233,0.07), transparent 40%), radial-gradient(circle at 85% 90%, rgba(139,92,246,0.07), transparent 40%);
+  min-height: 100vh; padding: 2rem 1rem;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+.proto-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 1rem; }
+h4 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.5rem; color: var(--accent); }
+.card { background: rgba(255,255,255,0.75); backdrop-filter: blur(10px); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.5rem; box-shadow: 0 1px 3px rgba(14,165,233,0.08), 0 4px 12px rgba(14,165,233,0.06); }
+.proto-field { margin-bottom: 0.75rem; }
+.proto-field label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--ink); margin-bottom: 0.25rem; }
+.proto-field input, .proto-field select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); font-size: 0.88rem; background: white; color: var(--ink); }
+.proto-field input:focus, .proto-field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,0.1); }
+.proto-radio-group { display: flex; gap: 1rem; margin-bottom: 0.75rem; }
+.proto-radio { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.88rem; }
+.proto-radio input { accent-color: var(--accent); }
+.callout { border-left: 4px solid var(--accent); background: rgba(14,165,233,0.04); padding: 0.75rem 1rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; margin: 0.75rem 0; font-size: 0.82rem; }
+.form-section { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bottom: 1rem; }
+.form-section:last-child { border-bottom: none; }
+.form-section-title { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.75rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="proto-label">交互原型 — 任务创建表单（话题选择部分）</div>
+<div class="card">
+  <div class="form-section">
+    <div class="form-section-title">基本信息</div>
+    <div class="proto-field">
+      <label>任务名称</label>
+      <input type="text" value="下载频道A的电视剧" placeholder="输入任务名称">
+    </div>
+    <div class="proto-field">
+      <label>来源频道链接</label>
+      <input type="text" value="https://t.me/channel_a" placeholder="https://t.me/...">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-section-title">目标话题</div>
+    <div class="proto-field">
+      <label>话题分类模式</label>
+      <div class="proto-radio-group">
+        <label class="proto-radio">
+          <input type="radio" name="topicMode" value="auto" checked onchange="toggleTopicMode()">
+          自动分类（推荐）
+        </label>
+        <label class="proto-radio">
+          <input type="radio" name="topicMode" value="manual" onchange="toggleTopicMode()">
+          手动指定
+        </label>
+      </div>
+    </div>
+    <div class="proto-field" id="topicSelectField" style="display:none;">
+      <label>选择话题</label>
+      <select id="topicSelect">
+        <option value="1">General (默认)</option>
+        <option value="123">电视剧</option>
+        <option value="456">漫画</option>
+        <option value="789">模特A</option>
+      </select>
+    </div>
+    <div class="callout">
+      <span id="topicHint">自动分类模式：文件上传时由规则引擎根据来源频道、文件名、媒体类型自动决定目标话题。</span>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-section-title">下载选项</div>
+    <div class="proto-field">
+      <label>媒体类型</label>
+      <div class="proto-radio-group">
+        <label class="proto-radio"><input type="checkbox" checked> 视频</label>
+        <label class="proto-radio"><input type="checkbox" checked> 图片</label>
+        <label class="proto-radio"><input type="checkbox"> 文档</label>
+        <label class="proto-radio"><input type="checkbox"> 音频</label>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+function toggleTopicMode() {
+  var mode = document.querySelector('input[name="topicMode"]:checked').value;
+  var field = document.getElementById('topicSelectField');
+  var hint = document.getElementById('topicHint');
+  if (mode === 'manual') {
+    field.style.display = 'block';
+    hint.textContent = '手动指定模式：该任务的所有文件将上传到选定话题，跳过规则引擎自动匹配。';
+  } else {
+    field.style.display = 'none';
+    hint.textContent = '自动分类模式：文件上传时由规则引擎根据来源频道、文件名、媒体类型自动决定目标话题。';
+  }
+}
+</script>
+</body>
+</html>

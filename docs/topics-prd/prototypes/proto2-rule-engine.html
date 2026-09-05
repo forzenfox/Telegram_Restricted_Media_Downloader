@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 - 分类规则引擎</title>
+<style>
+:root {
+  --bg: #F8FAFC; --bg2: #FFFFFF; --ink: #1E293B; --muted: #64748B;
+  --rule: #E2E8F0; --accent: #0EA5E9; --accent2: #8B5CF6;
+  --accent-grad: linear-gradient(135deg, #0EA5E9, #8B5CF6);
+  --success: #10B981; --warning: #F59E0B; --danger: #EF4444;
+  --radius: 12px; --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.7; color: var(--ink); background: var(--bg);
+  background-image: radial-gradient(circle at 15% 10%, rgba(14,165,233,0.07), transparent 40%), radial-gradient(circle at 85% 90%, rgba(139,92,246,0.07), transparent 40%);
+  min-height: 100vh; padding: 2rem 1rem;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+.proto-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 1rem; }
+h4 { font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.5rem; color: var(--accent); }
+.card { background: rgba(255,255,255,0.75); backdrop-filter: blur(10px); border: 1px solid var(--rule); border-radius: var(--radius); padding: 1.5rem; box-shadow: 0 1px 3px rgba(14,165,233,0.08), 0 4px 12px rgba(14,165,233,0.06); }
+.proto-rule-flow { display: flex; flex-direction: column; gap: 0.5rem; }
+.proto-rule-step { display: flex; align-items: center; gap: 0.75rem; padding: 0.65rem 1rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); background: white; font-size: 0.85rem; transition: all 0.15s; }
+.proto-rule-step.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,0.1); }
+.proto-rule-step.matched { border-color: var(--success); background: rgba(16,185,129,0.05); }
+.proto-rule-step .priority { font-size: 0.75rem; font-weight: 700; color: var(--muted); width: 24px; }
+.proto-rule-step .type { font-weight: 600; min-width: 120px; }
+.proto-rule-step .desc { color: var(--muted); flex: 1; }
+.proto-rule-step .result { font-size: 0.78rem; font-weight: 600; }
+.proto-rule-arrow { text-align: center; color: var(--muted); font-size: 0.75rem; }
+.proto-test { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+.proto-test-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.proto-test-row select, .proto-test-row input { padding: 0.4rem 0.6rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); font-size: 0.82rem; }
+.proto-test-result { padding: 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; margin-top: 0.5rem; }
+.proto-btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 1rem; background: var(--accent-grad); color: white; border: none; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.proto-btn:hover { opacity: 0.9; }
+.proto-btn.sm { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="proto-label">交互原型 — 分类规则引擎匹配流程</div>
+<div class="card">
+  <div class="proto-rule-flow">
+    <div class="proto-rule-step" id="step-manual">
+      <span class="priority">P1</span>
+      <span class="type">手动指定</span>
+      <span class="desc">任务创建时用户选择目标话题</span>
+      <span class="result" id="res-manual"></span>
+    </div>
+    <div class="proto-rule-arrow">↓ 未指定则继续</div>
+    <div class="proto-rule-step" id="step-source">
+      <span class="priority">P2</span>
+      <span class="type">来源频道</span>
+      <span class="desc">来源 chat_id 匹配分类规则</span>
+      <span class="result" id="res-source"></span>
+    </div>
+    <div class="proto-rule-arrow">↓ 未匹配则继续</div>
+    <div class="proto-rule-step" id="step-regex">
+      <span class="priority">P3</span>
+      <span class="type">文件名正则</span>
+      <span class="desc">文件名匹配正则表达式</span>
+      <span class="result" id="res-regex"></span>
+    </div>
+    <div class="proto-rule-arrow">↓ 未匹配则继续</div>
+    <div class="proto-rule-step" id="step-media">
+      <span class="priority">P4</span>
+      <span class="type">媒体类型</span>
+      <span class="desc">photo / video / document 类型匹配</span>
+      <span class="result" id="res-media"></span>
+    </div>
+    <div class="proto-rule-arrow">↓ 未匹配则继续</div>
+    <div class="proto-rule-step" id="step-default">
+      <span class="priority">P5</span>
+      <span class="type">默认话题</span>
+      <span class="desc">兜底存入默认话题 (topic_id=1)</span>
+      <span class="result" style="color:var(--success);">→ topic_id=1</span>
+    </div>
+  </div>
+
+  <div class="proto-test">
+    <h4 style="margin-bottom:0.5rem;">模拟匹配</h4>
+    <div class="proto-test-row">
+      <select id="testSource">
+        <option value="-100aaa">来源: 频道A (电视剧)</option>
+        <option value="-100bbb">来源: 频道B (漫画)</option>
+        <option value="-100ccc">来源: 频道C (模特A)</option>
+        <option value="-100xxx">来源: 频道X (未知)</option>
+      </select>
+      <input type="text" id="testFilename" value="ShowName_EP01_1080p.mp4" placeholder="文件名" style="flex:1;min-width:180px;">
+      <select id="testMedia">
+        <option value="video">video</option>
+        <option value="photo">photo</option>
+        <option value="document">document</option>
+      </select>
+      <button class="proto-btn sm" onclick="runMatch()">匹配</button>
+    </div>
+    <div id="matchResult" class="proto-test-result" style="display:none;"></div>
+  </div>
+</div>
+</div>
+
+<script>
+var matchRules = {
+  '-100aaa': { topic: '电视剧', topicId: 123 },
+  '-100bbb': { topic: '漫画', topicId: 456 },
+  '-100ccc': { topic: '模特A', topicId: 789 }
+};
+var regexRules = [
+  { pattern: /EP\d+|第\d+集|S\d+E\d+/i, topic: '电视剧', topicId: 123 },
+  { pattern: /漫画|manga|chapter/i, topic: '漫画', topicId: 456 }
+];
+var mediaTypeRules = {
+  'video': { topic: '电视剧', topicId: 123 },
+  'photo': { topic: '模特A', topicId: 789 }
+};
+
+function runMatch() {
+  var source = document.getElementById('testSource').value;
+  var filename = document.getElementById('testFilename').value;
+  var media = document.getElementById('testMedia').value;
+
+  ['step-manual','step-source','step-regex','step-media','step-default'].forEach(function(id) {
+    var el = document.getElementById(id);
+    el.classList.remove('active','matched');
+    var res = el.querySelector('.result');
+    if (res && id !== 'step-default') res.innerHTML = '';
+  });
+
+  document.getElementById('res-manual').innerHTML = '<span style="color:var(--muted);">未指定</span>';
+
+  var step2 = document.getElementById('step-source');
+  step2.classList.add('active');
+  if (matchRules[source]) {
+    step2.classList.remove('active');
+    step2.classList.add('matched');
+    document.getElementById('res-source').innerHTML = '<span style="color:var(--success);">→ ' + matchRules[source].topic + ' (topic_id=' + matchRules[source].topicId + ')</span>';
+    showResult(matchRules[source].topic, matchRules[source].topicId, '来源频道匹配');
+    return;
+  }
+  document.getElementById('res-source').innerHTML = '<span style="color:var(--muted);">未匹配</span>';
+
+  var step3 = document.getElementById('step-regex');
+  step3.classList.add('active');
+  for (var i = 0; i < regexRules.length; i++) {
+    if (regexRules[i].pattern.test(filename)) {
+      step3.classList.remove('active');
+      step3.classList.add('matched');
+      document.getElementById('res-regex').innerHTML = '<span style="color:var(--success);">→ ' + regexRules[i].topic + ' (topic_id=' + regexRules[i].topicId + ')</span>';
+      showResult(regexRules[i].topic, regexRules[i].topicId, '文件名正则匹配');
+      return;
+    }
+  }
+  document.getElementById('res-regex').innerHTML = '<span style="color:var(--muted);">未匹配</span>';
+
+  var step4 = document.getElementById('step-media');
+  step4.classList.add('active');
+  if (mediaTypeRules[media]) {
+    step4.classList.remove('active');
+    step4.classList.add('matched');
+    document.getElementById('res-media').innerHTML = '<span style="color:var(--success);">→ ' + mediaTypeRules[media].topic + ' (topic_id=' + mediaTypeRules[media].topicId + ')</span>';
+    showResult(mediaTypeRules[media].topic, mediaTypeRules[media].topicId, '媒体类型匹配');
+    return;
+  }
+  document.getElementById('res-media').innerHTML = '<span style="color:var(--muted);">未匹配</span>';
+
+  document.getElementById('step-default').classList.add('matched');
+  showResult('General (默认)', 1, '无规则匹配，使用默认话题');
+}
+
+function showResult(topic, topicId, reason) {
+  var el = document.getElementById('matchResult');
+  el.style.display = 'block';
+  el.style.background = 'rgba(16,185,129,0.06)';
+  el.style.border = '1px solid rgba(16,185,129,0.2)';
+  el.innerHTML = '<strong style="color:var(--success);">匹配结果</strong><br>话题: ' + topic + ' (topic_id=' + topicId + ')<br>匹配方式: ' + reason;
+}
+</script>
+</body>
+</html>

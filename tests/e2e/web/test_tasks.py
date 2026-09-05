@@ -7,17 +7,17 @@
 import pytest
 from playwright.sync_api import Page
 
-from ..pages.tasks_page import TasksPage
 from ..fixtures.task_helpers import (
+    cleanup_residual_tasks,
     create_download_task,
     create_forward_task,
+    query_repository_files,
+    query_repository_sources,
+    query_repository_status,
     start_task,
     wait_for_task_completion,
-    query_repository_files,
-    query_repository_status,
-    query_repository_sources,
-    cleanup_residual_tasks,
 )
+from ..pages.tasks_page import TasksPage
 
 
 @pytest.fixture
@@ -337,6 +337,36 @@ class TestListenDownloadTaskForm:
         tasks_page.open_create_modal_with_type("listen_download")
         tasks_page.wait_for_timeout(500)
         assert tasks_page.is_source_chat_visible()
+
+    def test_listen_download_validation_does_not_require_message_id(
+        self, tasks_page: TasksPage, test_token: str, live_server: str
+    ):
+        """T009-2: 监听下载任务只需源频道，不应因未填消息ID而报错
+
+        回归：监听任务无需消息范围，前端校验应跳过消息ID/日期等范围校验，
+        否则填了源频道也会提示"请输入消息 ID 范围"导致无法创建。
+        """
+        tasks_page.navigate(live_server)
+        tasks_page.wait_for_page_loaded()
+        tasks_page.open_create_modal_with_type("listen_download")
+        tasks_page.wait_for_timeout(500)
+        tasks_page.fill_source_chat("@test_channel")
+        tasks_page.wait_for_timeout(300)
+
+        # 同步 Alpine createForm 到 taskManager（模拟 handleCreateTask 的同步步骤），
+        # 再调用前端校验逻辑，验证监听任务不要求消息 ID 范围
+        errors = tasks_page.page.evaluate(
+            "() => {"
+            "  const el = document.querySelector('[x-data]');"
+            "  const d = el && window.Alpine && window.Alpine.$data(el);"
+            "  if (!d) return ['no-alpine'];"
+            "  Object.assign(taskManager.createForm, d.createForm);"
+            "  return taskManager.validateCreateForm();"
+            "}"
+        )
+        assert "请输入消息 ID 范围" not in errors, (
+            f"监听下载任务不应要求消息 ID 范围，但收到错误: {errors}"
+        )
 
 
 class TestDateRangeMode:
