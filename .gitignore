@@ -26,6 +26,10 @@ DownloadRecordForm/
 .trmd/
 .history
 
+# Logs
+logs/
+*.log
+
 # Tests
 .coverage
 *.yaml

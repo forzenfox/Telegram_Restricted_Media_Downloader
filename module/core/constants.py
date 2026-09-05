@@ -4,8 +4,8 @@
 从 module/__init__.py 提取的全局常量、路径和版本信息。
 """
 
-import os
 import atexit
+import os
 import platform
 
 from pyrogram.types.messages_and_media import LinkPreviewOptions
@@ -35,8 +35,12 @@ __copyright__ = f"Copyright (C) 2024-{__update_date__[:4]} {AUTHOR} <https://git
 SOFTWARE_FULL_NAME = "Telegram Restricted Media Downloader"
 SOFTWARE_SHORT_NAME = "TRMD"
 
-# 工作目录（软件所在目录）
-WORK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 工作目录（软件所在目录，即项目根）
+# 注意：本文件位于 module/core/ 下，推导必须为三层 dirname，
+# 否则 WORK_DIR 会错误解析为 module 子目录（重构 e42ba64 移入 core/
+# 后未同步修正的历史遗留），导致日志/数据目录偏离 Docker 部署挂载
+# （./logs:/app/logs、./data/.trmd:/app/.trmd）。
+WORK_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 路径常量
 PLATFORM = platform.system()
