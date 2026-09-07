@@ -34,12 +34,23 @@ def db_path():
             time.sleep(0.1)
 
 
+class FakeCleanupScheduler:
+    """模拟 CleanupScheduler，仅验证启动钩子被调用。"""
+
+    def __init__(self):
+        self.started = False
+
+    async def start(self):
+        self.started = True
+
+
 class FakeTaskExecutor:
     """模拟 TaskExecutor，记录恢复与提交调用。"""
 
     def __init__(self):
         self.recovered = False
         self.submitted = []
+        self.cleanup_scheduler = FakeCleanupScheduler()
 
     async def recover_listeners(self):
         self.recovered = True
@@ -135,4 +146,7 @@ class TestInitTaskExecutorRecovery:
         assert qk is not None
         assert qk.status == TaskStatus.RUNNING
         assert queued.task_id in fake_executor.submitted
+
+        # 定时清理调度器随启动流程启动
+        assert fake_executor.cleanup_scheduler.started is True
         await db.close_db()

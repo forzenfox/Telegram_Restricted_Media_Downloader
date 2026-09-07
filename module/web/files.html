@@ -145,6 +145,14 @@
             </svg>
             <span>上传选中文件</span>
           </button>
+          <button
+            x-show="selectedFiles.length > 0"
+            @click="openDeleteModal()"
+            class="btn btn-secondary"
+            data-testid="delete-selected-btn"
+          >
+            🗑️ 删除选中
+          </button>
         </div>
       </header>
 
@@ -455,6 +463,62 @@
         </div>
       </div>
     </div>
+
+    <!-- 删除确认弹窗 -->
+    <div 
+      x-show="showDeleteModal"
+      x-transition:enter="transition ease-out duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      @click="closeDeleteModal()"
+      data-testid="delete-modal"
+    >
+      <div 
+        x-show="showDeleteModal"
+        x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="opacity-0 scale-95"
+        x-transition:enter-end="opacity-100 scale-100"
+        x-transition:leave="transition ease-in duration-300"
+        x-transition:leave-start="opacity-100 scale-100"
+        x-transition:leave-end="opacity-0 scale-95"
+        class="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-md"
+        @click.stop
+      >
+        <div class="modal-header">
+          <h3 class="modal-title text-white">确认删除</h3>
+          <button @click="closeDeleteModal()" class="text-slate-400 hover:text-white" data-testid="delete-modal-close-btn">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="text-sm text-slate-300">
+            即将删除 <span class="text-red-400 font-medium" x-text="selectedFiles.length"></span> 个文件，
+            总大小 <span class="text-red-400 font-medium" x-text="formatFileSize(getTotalSelectedSize())"></span>。
+          </p>
+          <p class="text-xs text-slate-500 mt-2">⚠️ 删除后不可恢复；正在下载/上传中的文件将被自动跳过。</p>
+        </div>
+        <div class="modal-footer">
+          <button @click="closeDeleteModal()" class="btn btn-secondary" data-testid="delete-cancel-btn">
+            取消
+          </button>
+          <button
+            @click="handleDelete()"
+            :disabled="deleting"
+            class="btn btn-primary"
+            data-testid="delete-confirm-btn"
+          >
+            <span x-show="!deleting">确认删除</span>
+            <span x-show="deleting">删除中...</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- JavaScript 文件 -->
@@ -477,6 +541,8 @@
         loading: false,
         error: null,
         showUploadModal: false,
+        showDeleteModal: false,
+        deleting: false,
         sortBy: 'name',
         sortOrder: 'asc',
         uploadForm: {
@@ -598,6 +664,38 @@
             this.addNotification('success', `已创建 ${count} 个上传任务`);
           } catch (error) {
             this.addNotification('error', `创建上传任务失败: ${error.message}`);
+          }
+        },
+
+        openDeleteModal() {
+          if (this.selectedFiles.length === 0) {
+            this.addNotification('warning', '请先选择要删除的文件');
+            return;
+          }
+          this.showDeleteModal = true;
+        },
+
+        closeDeleteModal() {
+          this.showDeleteModal = false;
+        },
+
+        async handleDelete() {
+          this.deleting = true;
+          try {
+            const result = await api.deleteFiles(
+              this.selectedFiles.map(f => f.path)
+            );
+            this.closeDeleteModal();
+            this.clearSelection();
+            await this.loadFiles(this.currentPath);
+            const parts = [`已删除 ${result.deleted} 个文件`];
+            if (result.skipped > 0) parts.push(`跳过 ${result.skipped} 个（使用中）`);
+            if (result.failed > 0) parts.push(`失败 ${result.failed} 个`);
+            this.addNotification('success', parts.join('，'));
+          } catch (error) {
+            this.addNotification('error', `删除失败: ${error.message}`);
+          } finally {
+            this.deleting = false;
           }
         },
 

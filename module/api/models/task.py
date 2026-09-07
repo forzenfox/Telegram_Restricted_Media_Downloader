@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Literal, Optional, Union
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
-TaskType = Literal["download", "forward", "upload", "listen_download", "listen_forward"]
+TaskType = Literal["download", "forward", "upload", "listen_download", "listen_forward", "cleanup_files"]
 TaskStatus = Literal["pending", "queued", "running", "completed", "failed", "cancelled"]
 RangeMode = Literal["date_range", "id_range", "multiple_ids", "all", "recent"]
 

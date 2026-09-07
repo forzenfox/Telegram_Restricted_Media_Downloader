@@ -48,6 +48,7 @@ class TaskType(Enum):
     UPLOAD = "upload"
     LISTEN_DOWNLOAD = "listen_download"
     LISTEN_FORWARD = "listen_forward"
+    CLEANUP_FILES = "cleanup_files"
 
 
 class TaskStatus(Enum):
@@ -612,15 +613,29 @@ class TaskManager:
 
         params = params or {}
 
-        # 解析源对话标识符
-        resolved_chat = await self._resolve_chat_id(task_type, chat_id, params)
+        # 解析源对话标识符（定时清理任务无源对话，使用哨兵 chat_id）
+        if task_type == TaskType.CLEANUP_FILES:
+            from module.core.identifier_service import ResolvedChat
+
+            resolved_chat = ResolvedChat(
+                chat_id=-1,
+                chat_type="unknown",
+                chat_name="cleanup",
+                username=None,
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        else:
+            resolved_chat = await self._resolve_chat_id(task_type, chat_id, params)
         resolved_chat_id = resolved_chat.chat_id
 
         # 监听任务排他性校验
         self._check_listen_conflict(resolved_chat_id, task_type)
 
-        # 消息范围参数校验（UPLOAD 任务不需要消息范围）
-        if task_type != TaskType.UPLOAD:
+        # 消息范围参数校验（UPLOAD / CLEANUP_FILES 任务不需要消息范围）
+        if task_type not in (TaskType.UPLOAD, TaskType.CLEANUP_FILES):
             range_mode = params.get("range_mode", "all")
             valid_modes = {"id_range", "multiple_ids", "date_range", "all", "recent"}
             if range_mode not in valid_modes:
@@ -788,6 +803,64 @@ class TaskManager:
 
             await self._save_task(task)
             log.info(f"任务重试: {task_id} (第 {task.retry_count} 次)")
+
+    async def build_referenced_paths(self) -> set[str]:
+        """收集当前被活跃任务引用的本地文件路径集合。
+
+        供文件删除/定时清理做"任务引用保护"：状态为 pending/queued/running 的
+        非 cleanup 任务，其 params.file_paths 与已落地的子任务 file_path
+        全部纳入保护；同时为每个文件补充 ``.temp`` 变体（下载中中间文件）兜底。
+
+        Returns:
+            规范化绝对路径集合（含 .temp 变体）
+        """
+        active_statuses = (
+            TaskStatus.PENDING.value,
+            TaskStatus.QUEUED.value,
+            TaskStatus.RUNNING.value,
+        )
+        referenced: set[str] = set()
+
+        async with get_session() as session:
+            records = (
+                (
+                    await session.execute(
+                        select(TaskRecord).where(
+                            TaskRecord.status.in_(active_statuses)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            for record in records:
+                # 定时清理任务自身不产生文件引用。
+                if record.task_type == TaskType.CLEANUP_FILES.value:
+                    continue
+
+                # params.file_paths（排队中的上传任务目标文件等）。
+                for p in record.params.get("file_paths") or []:
+                    if p:
+                        referenced.add(
+                            os.path.abspath(os.path.normpath(str(p)))
+                        )
+
+                # 已落地的子任务文件路径（下载中/上传中）。
+                item_records = (
+                    await session.execute(
+                        select(TaskItemRecord).where(
+                            TaskItemRecord.task_id == record.id
+                        )
+                    )
+                ).scalars().all()
+                for item in item_records:
+                    if item.file_path:
+                        norm = os.path.abspath(os.path.normpath(item.file_path))
+                        referenced.add(norm)
+                        referenced.add(f"{norm}.temp")
+
+        return referenced
 
     async def get_task(self, task_id: str, with_items: bool = False) -> Task | None:
         """获取任务。

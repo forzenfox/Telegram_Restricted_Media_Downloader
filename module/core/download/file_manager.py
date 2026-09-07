@@ -4,6 +4,7 @@ import os
 import hashlib
 import mimetypes
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal, Callable, Awaitable
 
 from module import log
@@ -98,6 +99,15 @@ class UploadProgress:
 # ============================================================
 # 异常体系
 # ============================================================
+
+
+@dataclass
+class DeleteCheckResult:
+    """描述一次删除路径预检的结论。"""
+
+    path: str  # 规范化绝对路径
+    ok: bool  # 是否允许删除
+    reason: str | None = None  # 拒绝原因：OUT_OF_BOUNDS / SYSTEM_PATH / IS_DIRECTORY
 
 
 class FileManagerError(Exception):
@@ -683,6 +693,223 @@ class FileManager:
         self._check_system_path(abs_path)
 
         return safe_delete(abs_path)
+
+    async def scan_expired_files(
+        self,
+        root: str,
+        keep_days: int,
+        batch_size: int = 1000,
+        referenced_paths: set[str] | None = None,
+    ) -> list[FileInfo]:
+        """递归扫描根目录下的过期文件（供定时清理使用）。
+
+        过期判定：``file.mtime < now - keep_days 天``（严格大于保留天数才算过期）。
+        过滤规则：跳过隐藏文件、跳过写入中的 ``.temp`` 文件、
+        跳过被活跃任务引用（referenced_paths）的文件。
+
+        Args:
+            root: 扫描根目录绝对路径
+            keep_days: 保留天数
+            batch_size: 内部累积批大小上限（防大目录一次驻留过多内存）
+            referenced_paths: 任务引用保护索引（绝对路径集合）
+
+        Returns:
+            满足过期条件的 FileInfo 列表
+        """
+        abs_root = os.path.abspath(os.path.normpath(root))
+        if not os.path.exists(abs_root) or not os.path.isdir(abs_root):
+            return []
+
+        # 系统目录黑名单检查。
+        self._check_system_path(abs_root)
+
+        cutoff = datetime.now(timezone.utc).timestamp() - keep_days * 86400
+        referenced = {
+            os.path.abspath(os.path.normpath(p)) for p in (referenced_paths or set())
+        }
+
+        result: list[FileInfo] = []
+        pending: list[FileInfo] = []
+
+        def _accumulate(info: FileInfo) -> None:
+            pending.append(info)
+            if len(pending) >= batch_size:
+                result.extend(pending)
+                pending.clear()
+
+        def _scan(directory: str) -> None:
+            try:
+                entries = list(os.scandir(directory))
+            except PermissionError as e:
+                log.warning(f'权限不足，无法扫描目录 "{directory}": {e}')
+                return
+
+            for entry in entries:
+                # 隐藏文件过滤。
+                if self._is_hidden(entry.name):
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        _scan(entry.path)
+                    elif entry.is_file():
+                        if entry.name.endswith(".temp"):
+                            continue
+                        abs_path = os.path.abspath(entry.path)
+                        if abs_path in referenced or f"{abs_path}.temp" in referenced:
+                            continue
+                        try:
+                            stat = entry.stat()
+                        except OSError:
+                            continue
+                        if stat.st_mtime < cutoff:
+                            _accumulate(
+                                self._build_file_info(abs_path, entry.name, stat)
+                            )
+                except OSError:
+                    continue
+
+        _scan(abs_root)
+        result.extend(pending)
+        return result
+
+    async def precheck_delete_paths(
+        self,
+        paths: list[str],
+        save_root: str,
+    ) -> list[DeleteCheckResult]:
+        """批量路径安全预检（不执行删除）。
+
+        单条检查顺序：
+          1. 绝对化 + normpath
+          2. 必须在 save_root 之下（防越界）
+          3. 系统目录黑名单
+          4. 不存在 → 视为已删除（幂等，ok=True）
+          5. 是目录 → 拒绝
+
+        Args:
+            paths: 待删除文件路径列表
+            save_root: 下载根目录绝对路径
+
+        Returns:
+            list[DeleteCheckResult]：与输入 paths 一一对应
+        """
+        root = os.path.abspath(os.path.normpath(save_root))
+        results: list[DeleteCheckResult] = []
+
+        for p in paths:
+            abs_path = os.path.abspath(os.path.normpath(p))
+            # 越界检查。
+            if not abs_path.startswith(root):
+                results.append(
+                    DeleteCheckResult(path=abs_path, ok=False, reason="OUT_OF_BOUNDS")
+                )
+                continue
+            # 系统目录黑名单。
+            try:
+                self._check_system_path(abs_path)
+            except PermissionError:
+                results.append(
+                    DeleteCheckResult(path=abs_path, ok=False, reason="SYSTEM_PATH")
+                )
+                continue
+            # 不存在：幂等视为已删除。
+            if not os.path.exists(abs_path):
+                results.append(DeleteCheckResult(path=abs_path, ok=True))
+                continue
+            # 仅支持文件。
+            if os.path.isdir(abs_path):
+                results.append(
+                    DeleteCheckResult(path=abs_path, ok=False, reason="IS_DIRECTORY")
+                )
+                continue
+
+            results.append(DeleteCheckResult(path=abs_path, ok=True))
+
+        return results
+
+    async def delete_many(
+        self,
+        paths: list[str],
+        save_root: str,
+        referenced_paths: set[str] | None = None,
+    ) -> dict:
+        """批量删除文件（每条均过预检 + 任务引用保护）。
+
+        Args:
+            paths: 待删除文件路径列表
+            save_root: 下载根目录绝对路径
+            referenced_paths: 任务引用保护索引（绝对路径集合）
+
+        Returns:
+            {"total", "deleted", "failed", "skipped", "results"}
+            results[i] = {"file_path", "success", "deleted", "skipped", "reason"}
+        """
+        root = os.path.abspath(os.path.normpath(save_root))
+        referenced = {
+            os.path.abspath(os.path.normpath(p)) for p in (referenced_paths or set())
+        }
+
+        checks = await self.precheck_delete_paths(paths, save_root=root)
+
+        total = len(checks)
+        deleted = 0
+        failed = 0
+        skipped = 0
+        results: list[dict] = []
+
+        for check in checks:
+            entry = {
+                "file_path": check.path,
+                "success": False,
+                "deleted": False,
+                "skipped": False,
+                "reason": check.reason,
+            }
+
+            # 预检拒绝（越界/系统目录/目录）→ 失败。
+            if not check.ok:
+                failed += 1
+                results.append(entry)
+                continue
+
+            # 任务引用保护：进行中的文件或被活跃任务引用的文件跳过。
+            if check.path in referenced or f"{check.path}.temp" in referenced:
+                entry["skipped"] = True
+                entry["reason"] = "task_referenced"
+                skipped += 1
+                results.append(entry)
+                continue
+
+            # 缺失文件：幂等视为已删除。
+            if not os.path.exists(check.path):
+                entry["success"] = True
+                entry["deleted"] = True
+                entry["reason"] = None
+                deleted += 1
+                results.append(entry)
+                continue
+
+            # 执行删除。
+            try:
+                ok = await self.delete_local_file(check.path)
+            except PermissionError:
+                ok = False
+            if ok:
+                entry["success"] = True
+                entry["deleted"] = True
+                entry["reason"] = None
+                deleted += 1
+            else:
+                failed += 1
+            results.append(entry)
+
+        return {
+            "total": total,
+            "deleted": deleted,
+            "failed": failed,
+            "skipped": skipped,
+            "results": results,
+        }
 
     async def cleanup_after_upload(
         self,

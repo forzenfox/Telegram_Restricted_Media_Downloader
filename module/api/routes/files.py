@@ -10,9 +10,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Query
 
-from module.api.dependencies import require_token, get_file_manager, get_config_manager
+from module.api.dependencies import (
+    require_token,
+    get_file_manager,
+    get_config_manager,
+    get_task_manager,
+)
 from module.api.responses import json_response, error_json_response
-from module.api.models.file import FileInfo, FileUploadRequest
+from module.api.models.file import (
+    FileInfo,
+    FileUploadRequest,
+    FileBatchDeleteRequest,
+)
 
 router = APIRouter(prefix="/files", tags=["文件"])
 
@@ -285,3 +294,39 @@ async def upload_files(
 
     except Exception as e:
         return error_json_response("上传失败", str(e))
+
+
+@router.delete("/batch")
+async def delete_files_batch(
+    request: Request,
+    body: FileBatchDeleteRequest,
+    token: str = Depends(require_token),
+):
+    """批量删除本地文件（仅支持文件，路径须位于下载根目录内）。
+
+    安全机制：路径边界预检 + 系统目录黑名单 + 任务引用保护。
+    被活跃（pending/queued/running）任务引用的文件将被跳过（skipped）。
+
+    :param request: FastAPI 请求对象
+    :param body: 批量删除请求体
+    :param token: 认证 Token
+    :return: 删除统计与逐条结果
+    """
+    file_manager = get_file_manager(request)
+    if not file_manager:
+        return error_json_response("文件管理服务不可用")
+
+    config_manager = get_config_manager(request)
+    save_root = os.path.abspath(config_manager.save_directory or "downloads")
+
+    task_manager = get_task_manager(request)
+    referenced_paths: set[str] = set()
+    if task_manager is not None:
+        referenced_paths = await task_manager.build_referenced_paths()
+
+    stats = await file_manager.delete_many(
+        body.file_paths,
+        save_root=save_root,
+        referenced_paths=referenced_paths,
+    )
+    return json_response(data=stats)

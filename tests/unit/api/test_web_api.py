@@ -184,6 +184,36 @@ async def unauthenticated_client(token_manager, task_manager, config_manager):
         yield ac, app
 
 
+@pytest.fixture
+def file_manager():
+    """提供真实 FileManager 实例（mock Telegram client，删除操作不依赖客户端）。"""
+    from unittest.mock import AsyncMock
+
+    from module.core.download.file_manager import FileManager
+
+    fm = FileManager(config={}, client=AsyncMock())
+    yield fm
+
+
+@pytest_asyncio.fixture
+async def files_client(token_manager, task_manager, config_manager, file_manager):
+    """提供已认证且挂载真实 FileManager 的测试客户端。"""
+    app = create_app(
+        token_manager=token_manager,
+        task_manager=task_manager,
+        config_manager=config_manager,
+        file_manager=file_manager,
+        monitor=None,
+    )
+    mock_service = task_manager._identifier_service
+    app.dependency_overrides[get_identifier_service] = lambda: mock_service
+    token = token_manager.generate(user_id=1)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as ac:
+        ac.headers.update({"Authorization": f"Bearer {token}"})
+        yield ac, app, token, file_manager
+
+
 # ==================== 认证测试 ====================
 
 
@@ -1451,3 +1481,320 @@ class TestTaskRouteExtras:
         # pending 状态不能重试（只能 failed/cancelled）
         resp = await ac.post(f"/api/tasks/{task.task_id}/retry")
         assert resp.status_code == 409
+
+
+class TestBuildReferencedPaths:
+    """任务引用保护索引测试。"""
+
+    @pytest.mark.asyncio
+    async def test_collects_params_file_paths_and_items(self, task_manager):
+        """活跃任务的 params.file_paths 与子任务 file_path 应被收集。"""
+        from datetime import UTC, datetime
+
+        from module.core.db import get_session
+        from module.core.task import models
+
+        now = datetime.now(UTC)
+        async with get_session() as session:
+            session.add(
+                models.TaskRecord(
+                    id="ref_t1",
+                    task_type="upload",
+                    status="running",
+                    chat_id=-1001,
+                    params={"file_paths": ["/tmp/run/up.mp4", "/tmp/run/up2.mp4"]},
+                    created_at=now,
+                )
+            )
+            session.add(
+                models.TaskRecord(
+                    id="ref_t2",
+                    task_type="download",
+                    status="queued",
+                    chat_id=-1002,
+                    params={},
+                    created_at=now,
+                )
+            )
+            await session.flush()
+            session.add(
+                models.TaskItemRecord(
+                    id="ref_i1",
+                    task_id="ref_t2",
+                    status="running",
+                    file_path="/tmp/run/dl.mp4",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+
+        referenced = await task_manager.build_referenced_paths()
+        assert "/tmp/run/up.mp4" in referenced
+        assert "/tmp/run/up2.mp4" in referenced
+        assert "/tmp/run/dl.mp4" in referenced
+        # .temp 兜底（下载中的中间文件）
+        assert "/tmp/run/dl.mp4.temp" in referenced
+
+    @pytest.mark.asyncio
+    async def test_excludes_cleanup_tasks_and_completed(self, task_manager):
+        """cleanup_files 任务自身与已完成任务的文件不应被收集。"""
+        from datetime import UTC, datetime
+
+        from module.core.db import get_session
+        from module.core.task import models
+
+        now = datetime.now(UTC)
+        async with get_session() as session:
+            session.add(
+                models.TaskRecord(
+                    id="ref_c",
+                    task_type="cleanup_files",
+                    status="running",
+                    chat_id=-1003,
+                    params={"file_paths": ["/tmp/run/clean.mp4"]},
+                    created_at=now,
+                )
+            )
+            session.add(
+                models.TaskRecord(
+                    id="ref_done",
+                    task_type="upload",
+                    status="completed",
+                    chat_id=-1004,
+                    params={"file_paths": ["/tmp/run/done.mp4"]},
+                    created_at=now,
+                )
+            )
+            await session.commit()
+
+        referenced = await task_manager.build_referenced_paths()
+        assert "/tmp/run/clean.mp4" not in referenced
+        assert "/tmp/run/done.mp4" not in referenced
+
+
+class TestBatchDeleteFiles:
+    """DELETE /api/files/batch 批量删除接口测试。"""
+
+    @staticmethod
+    def _point_save_root(config_manager, root):
+        """将配置的下载根目录指向测试临时目录。"""
+        config_manager.save_directory = root
+        config_manager.config["save_directory"] = root
+
+    @pytest.mark.asyncio
+    async def test_delete_success(self, files_client, tmp_path):
+        """正常删除：文件从磁盘消失，返回统计。"""
+        ac, app, token, fm = files_client
+        self._point_save_root(app.state.config_manager, str(tmp_path))
+        (tmp_path / "a.mp4").write_bytes(b"a")
+        (tmp_path / "b.jpg").write_bytes(b"b")
+
+        resp = await ac.request(
+            "DELETE",
+            "/api/files/batch",
+            json={"file_paths": [str(tmp_path / "a.mp4"), str(tmp_path / "b.jpg")]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["total"] == 2
+        assert data["deleted"] == 2
+        assert data["failed"] == 0
+        assert data["skipped"] == 0
+        assert not (tmp_path / "a.mp4").exists()
+        assert not (tmp_path / "b.jpg").exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_out_of_bounds_rejected(self, files_client, tmp_path):
+        """save_root 之外的路径拒绝删除，文件保留。"""
+        ac, app, token, fm = files_client
+        self._point_save_root(app.state.config_manager, str(tmp_path))
+        outside = tmp_path.parent / "outside.jpg"
+        outside.write_bytes(b"o")
+
+        resp = await ac.request("DELETE", "/api/files/batch", json={"file_paths": [str(outside)]})
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["failed"] == 1
+        assert data["results"][0]["reason"] == "OUT_OF_BOUNDS"
+        assert outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_skips_task_referenced(self, files_client, tmp_path):
+        """被活跃任务引用的文件跳过。"""
+        from datetime import UTC, datetime
+
+        from module.core.db import get_session
+        from module.core.task import models
+
+        ac, app, token, fm = files_client
+        self._point_save_root(app.state.config_manager, str(tmp_path))
+        ref_file = tmp_path / "ref.mp4"
+        ref_file.write_bytes(b"r")
+        free_file = tmp_path / "free.mp4"
+        free_file.write_bytes(b"f")
+
+        now = datetime.now(UTC)
+        async with get_session() as session:
+            session.add(
+                models.TaskRecord(
+                    id="del_ref",
+                    task_type="upload",
+                    status="queued",
+                    chat_id=-10099,
+                    params={"file_paths": [str(ref_file)]},
+                    created_at=now,
+                )
+            )
+            await session.commit()
+
+        resp = await ac.request(
+            "DELETE",
+            "/api/files/batch",
+            json={"file_paths": [str(ref_file), str(free_file)]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["deleted"] == 1
+        assert data["skipped"] == 1
+        assert ref_file.exists()
+        assert not free_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_empty_list_rejected(self, files_client):
+        """空文件列表应被拒绝（422）。"""
+        ac, app, token, fm = files_client
+        resp = await ac.request("DELETE", "/api/files/batch", json={"file_paths": []})
+        assert resp.status_code == 422
+
+
+class TestCreateCleanupTask:
+    """POST /api/tasks 定时清理任务创建测试。"""
+
+    @pytest.mark.asyncio
+    async def test_create_cleanup_files_success(self, client):
+        """合法的 cleanup_files 任务应创建成功。"""
+        ac, app, token = client
+        body = {
+            "task_type": "cleanup_files",
+            "params": {
+                "keep_days": 7,
+                "schedule": {"mode": "daily", "time": "03:00"},
+            },
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 201, resp.text
+        data = resp.json()["data"]
+        assert data["task_type"] == "cleanup_files"
+        assert data["params"]["keep_days"] == 7
+        assert data["params"]["schedule"]["mode"] == "daily"
+        assert "last_run" in data["params"]
+
+    @pytest.mark.asyncio
+    async def test_create_cleanup_invalid_keep_days(self, client):
+        """keep_days 非法（0）应返回明确参数错误。"""
+        ac, app, token = client
+        resp = await ac.post(
+            "/api/tasks",
+            json={"task_type": "cleanup_files", "params": {"keep_days": 0}},
+        )
+        assert resp.status_code == 400
+        assert "keep_days" in resp.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_create_cleanup_invalid_schedule_time(self, client):
+        """schedule.time 非法应返回明确参数错误。"""
+        ac, app, token = client
+        resp = await ac.post(
+            "/api/tasks",
+            json={
+                "task_type": "cleanup_files",
+                "params": {
+                    "keep_days": 7,
+                    "schedule": {"mode": "daily", "time": "25:99"},
+                },
+            },
+        )
+        assert resp.status_code == 400
+        assert "schedule" in resp.json()["message"]
+
+
+class TestCleanupTaskActions:
+    """定时清理任务 run/pause/resume 操作接口测试。"""
+
+    @pytest.mark.asyncio
+    async def test_run_non_cleanup_rejected(self, client):
+        """非清理任务不允许手动立即执行。"""
+        ac, app, token = client
+        task = await app.state.task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+        )
+        resp = await ac.post(f"/api/tasks/{task.task_id}/run")
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_run_cleanup_executor_not_ready(self, client):
+        """执行器未就绪时返回 503。"""
+        ac, app, token = client
+        task = await app.state.task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={"keep_days": 7, "schedule": {"mode": "daily", "time": "03:00"}},
+        )
+        resp = await ac.post(f"/api/tasks/{task.task_id}/run")
+        assert resp.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_run_cleanup_dispatches(self, client):
+        """执行器就绪时触发 run_now。"""
+        ac, app, token = client
+        task = await app.state.task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={"keep_days": 7, "schedule": {"mode": "daily", "time": "03:00"}},
+        )
+        fake_scheduler = AsyncMock()
+        fake_executor = MagicMock()
+        fake_executor.cleanup_scheduler = fake_scheduler
+        app.state.task_executor = fake_executor
+
+        resp = await ac.post(f"/api/tasks/{task.task_id}/run")
+        assert resp.status_code == 200
+        fake_scheduler.run_now.assert_awaited_once_with(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_pause_cleanup(self, client):
+        """暂停调度并持久化 paused 标志。"""
+        ac, app, token = client
+        task = await app.state.task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={"keep_days": 7, "schedule": {"mode": "daily", "time": "03:00"}},
+        )
+        fake_scheduler = AsyncMock()
+        fake_executor = MagicMock()
+        fake_executor.cleanup_scheduler = fake_scheduler
+        app.state.task_executor = fake_executor
+
+        resp = await ac.post(f"/api/tasks/{task.task_id}/pause")
+        assert resp.status_code == 200
+        fake_scheduler.pause.assert_awaited_once_with(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_resume_cleanup(self, client):
+        """恢复调度。"""
+        ac, app, token = client
+        task = await app.state.task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={
+                "keep_days": 7,
+                "schedule": {"mode": "daily", "time": "03:00"},
+                "paused": True,
+            },
+        )
+        fake_scheduler = AsyncMock()
+        fake_executor = MagicMock()
+        fake_executor.cleanup_scheduler = fake_scheduler
+        app.state.task_executor = fake_executor
+
+        resp = await ac.post(f"/api/tasks/{task.task_id}/resume")
+        assert resp.status_code == 200
+        fake_scheduler.resume.assert_awaited_once_with(task.task_id)

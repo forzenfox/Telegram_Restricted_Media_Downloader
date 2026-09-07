@@ -3751,3 +3751,127 @@ class TestForwardRestrictedFallback:
         updated = await task_manager.get_task(task.task_id)
         assert updated.status == TaskStatus.FAILED
         assert updated.items[0].status == ItemStatus.FAILED
+
+
+# ============================================================
+# 测试：_execute_cleanup（定时清理任务执行）
+# ============================================================
+
+
+class TestExecuteCleanup:
+    """测试 cleanup_files 任务执行一轮清理。"""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_deletes_expired_skips_referenced_keeps_fresh(
+        self, task_manager, tmp_path
+    ):
+        """过期文件删除、被引用文件跳过、新文件保留，任务保持运行态并写 last_run。"""
+        from datetime import UTC, datetime
+        from unittest.mock import AsyncMock, MagicMock
+
+        from module.core.download.file_manager import FileManager
+
+        # 真实 FileManager + 指向临时目录的 config
+        fm = FileManager(config={}, client=AsyncMock())
+        mock_cm = MagicMock()
+        mock_cm.save_directory = str(tmp_path)
+        task_manager.config_manager = mock_cm
+        executor = TaskExecutor(
+            task_manager=task_manager, file_manager=fm, client=AsyncMock()
+        )
+
+        # 文件准备：过期 old/ref，未过期 new
+        old_path = tmp_path / "old.mp4"
+        old_path.write_bytes(b"o")
+        ref_path = tmp_path / "ref.mp4"
+        ref_path.write_bytes(b"r")
+        (tmp_path / "new.mp4").write_bytes(b"n")
+        old_ts = datetime.now(UTC).timestamp() - 10 * 86400
+        os.utime(old_path, (old_ts, old_ts))
+        os.utime(ref_path, (old_ts, old_ts))
+
+        # 引用保护：ref 被一个 running 的 upload 任务引用
+        from module.core.db import get_session
+        from module.core.task import models
+
+        now = datetime.now(UTC)
+        async with get_session() as session:
+            session.add(
+                models.TaskRecord(
+                    id="clean_ref",
+                    task_type="upload",
+                    status="running",
+                    chat_id=-2001,
+                    params={"file_paths": [str(ref_path)]},
+                    created_at=now,
+                )
+            )
+            await session.commit()
+
+        task = await task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={
+                "keep_days": 7,
+                "schedule": {"mode": "daily", "time": "03:00"},
+                "last_run": {
+                    "scanned": 0,
+                    "deleted": 0,
+                    "freed_bytes": 0,
+                    "started_at": None,
+                    "finished_at": None,
+                    "next_run_at": None,
+                },
+            },
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+
+        # 文件结果
+        assert not old_path.exists()
+        assert ref_path.exists()  # 被引用 → 跳过
+        assert (tmp_path / "new.mp4").exists()
+
+        # 任务保持运行态（周期任务活性态），last_run 已更新
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.status == TaskStatus.RUNNING
+        last_run = updated.params["last_run"]
+        # 引用保护在扫描层生效：ref 不计入过期候选
+        assert last_run["scanned"] == 1
+        assert last_run["deleted"] == 1
+        assert last_run["skipped"] == 0
+        assert last_run["freed_bytes"] == 1
+        assert last_run["started_at"] is not None
+        assert last_run["finished_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_empty_dirs(self, task_manager, tmp_path):
+        """过期文件删除后产生的空目录应被移除。"""
+        from datetime import UTC, datetime
+        from unittest.mock import AsyncMock, MagicMock
+
+        from module.core.download.file_manager import FileManager
+
+        fm = FileManager(config={}, client=AsyncMock())
+        mock_cm = MagicMock()
+        mock_cm.save_directory = str(tmp_path)
+        task_manager.config_manager = mock_cm
+        executor = TaskExecutor(
+            task_manager=task_manager, file_manager=fm, client=AsyncMock()
+        )
+
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        stale = sub / "stale.mp4"
+        stale.write_bytes(b"s")
+        old_ts = datetime.now(UTC).timestamp() - 20 * 86400
+        os.utime(stale, (old_ts, old_ts))
+
+        task = await task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={"keep_days": 7, "schedule": {"mode": "interval", "interval_hours": 24}},
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+
+        assert not stale.exists()
+        assert not sub.exists()  # 空目录已被清理

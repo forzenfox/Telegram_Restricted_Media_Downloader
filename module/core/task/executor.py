@@ -97,6 +97,13 @@ class TaskExecutor:
         self._upload_semaphore = asyncio.Semaphore(ul_concurrency)
         self._forward_semaphore = asyncio.Semaphore(fwd_concurrency)
 
+        # 定时清理任务调度器（周期触发 cleanup_files 任务）。
+        from module.core.task.scheduler import CleanupScheduler
+
+        self.cleanup_scheduler = CleanupScheduler(
+            task_manager=task_manager, executor=self
+        )
+
     def _should_use_repository(self) -> bool:
         """判断是否启用仓库去重。"""
         result = (
@@ -156,6 +163,85 @@ class TaskExecutor:
             self.execute_task(task), self._event_loop
         )
 
+    async def _execute_cleanup(self, task: Task) -> None:
+        """执行一轮定时清理：递归扫描过期文件 → 批量删除 → 更新 last_run。
+
+        与监听任务一致：不调用 complete_task，任务保持 running（周期任务活性态）。
+        删除受任务引用保护约束；空目录在清理后移除。
+        """
+        params = dict(task.params or {})
+        keep_days = params.get("keep_days", 7)
+        root = self._resolve_save_root(task)
+        started_at = datetime.now(timezone.utc)
+
+        # 任务引用保护（跳过被活跃任务引用的文件）。
+        referenced = await self._task_manager.build_referenced_paths()
+        expired = await self._file_manager.scan_expired_files(
+            root,
+            keep_days=keep_days,
+            referenced_paths=referenced,
+        )
+        stats = await self._file_manager.delete_many(
+            [f.path for f in expired],
+            save_root=root,
+            referenced_paths=referenced,
+        )
+
+        # 计算释放空间（按实际删除的文件大小累加）。
+        result_by_path = {r["file_path"]: r for r in stats["results"]}
+        freed_bytes = 0
+        for fi in expired:
+            r = result_by_path.get(fi.path)
+            if r and r.get("deleted"):
+                freed_bytes += fi.size
+
+        finished_at = datetime.now(timezone.utc)
+        params["last_run"] = {
+            "scanned": len(expired),
+            "deleted": stats["deleted"],
+            "skipped": stats["skipped"],
+            "failed": stats["failed"],
+            "freed_bytes": freed_bytes,
+            "started_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "next_run_at": (params.get("last_run") or {}).get("next_run_at"),
+        }
+        task.params = params
+        await self._task_manager._save_task(task)
+
+        # 空目录清理。
+        if params.get("remove_empty_dirs", True):
+            self._remove_empty_dirs(root)
+
+        log.info(
+            f"定时清理完成: task={task.task_id} 扫描={len(expired)} "
+            f"删除={stats['deleted']} 跳过={stats['skipped']} 释放={freed_bytes} 字节"
+        )
+
+    def _resolve_save_root(self, task: Task) -> str:
+        """解析清理根目录：任务 scan_root 优先，否则取配置的下载根目录。"""
+        root = (task.params or {}).get("scan_root")
+        if root:
+            return os.path.abspath(os.path.normpath(root))
+        cm = self._config_manager or getattr(
+            self._task_manager, "config_manager", None
+        )
+        save_dir = getattr(cm, "save_directory", None) or "downloads"
+        return os.path.abspath(os.path.normpath(save_dir))
+
+    @staticmethod
+    def _remove_empty_dirs(root: str) -> None:
+        """自底向上移除根目录下的空目录（不删除根目录本身）。"""
+        root_abs = os.path.abspath(root)
+        for dirpath, _dirnames, _filenames in os.walk(root_abs, topdown=False):
+            if os.path.abspath(dirpath) == root_abs:
+                continue
+            try:
+                if not os.listdir(dirpath):
+                    os.rmdir(dirpath)
+            except OSError:
+                continue
+
     async def execute_task(self, task: Task) -> None:
         """执行一个任务，根据任务类型分派到不同的执行器。
 
@@ -173,13 +259,16 @@ class TaskExecutor:
                 await self._execute_listen_download(task)
             elif task.task_type == TaskType.LISTEN_FORWARD:
                 await self._execute_listen_forward(task)
+            elif task.task_type == TaskType.CLEANUP_FILES:
+                await self._execute_cleanup(task)
             else:
                 raise ExecutorError(f"未知任务类型: {task.task_type}")
 
-            # 监听任务为长期运行任务，不进入 completed 状态
+            # 监听任务/定时清理任务为长期运行任务，不进入 completed 状态
             if task.task_type not in (
                 TaskType.LISTEN_DOWNLOAD,
                 TaskType.LISTEN_FORWARD,
+                TaskType.CLEANUP_FILES,
             ):
                 # 检查子任务执行结果：所有子任务都失败/跳过时标记为 FAILED
                 # 重新加载任务以获取最新的子任务状态

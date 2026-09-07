@@ -256,6 +256,13 @@
             >
               📲 监听转发
             </button>
+            <button
+              data-testid="filter-type-cleanup"
+              @click="setTypeFilter('cleanup_files')"
+              :class="currentTypeFilter === 'cleanup_files' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              🧹 定时清理
+            </button>
           </div>
         </div>
 
@@ -569,6 +576,41 @@
                   <p class="text-sm text-slate-400">监听媒体类型</p>
                   <p class="text-white mt-1 text-sm" data-testid="detail-media-types" x-text="taskManager.formatFilterTypes(selectedTask.params?.media_types)"></p>
                 </div>
+
+                <!-- 定时清理：保留天数 -->
+                <div x-show="selectedTask.task_type === 'cleanup_files'">
+                  <p class="text-sm text-slate-400">保留天数</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-cleanup-keep-days" x-text="`${selectedTask.params?.keep_days ?? '-'} 天`"></p>
+                </div>
+
+                <!-- 定时清理：调度模式 -->
+                <div x-show="selectedTask.task_type === 'cleanup_files'">
+                  <p class="text-sm text-slate-400">调度模式</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-cleanup-schedule" x-text="taskManager.formatScheduleText(selectedTask.params?.schedule)"></p>
+                </div>
+
+                <!-- 定时清理：下次执行时间 -->
+                <div x-show="selectedTask.task_type === 'cleanup_files'">
+                  <p class="text-sm text-slate-400">下次执行</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-cleanup-next-run" x-text="selectedTask.params?.paused ? '已暂停' : (taskManager.formatTime(selectedTask.params?.last_run?.next_run_at) || '-')"></p>
+                </div>
+
+                <!-- 定时清理：空目录清理 -->
+                <div x-show="selectedTask.task_type === 'cleanup_files'">
+                  <p class="text-sm text-slate-400">空目录清理</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-cleanup-remove-empty-dirs" x-text="taskManager.formatBoolean(selectedTask.params?.remove_empty_dirs)"></p>
+                </div>
+
+                <!-- 定时清理：最近一次统计 -->
+                <div x-show="selectedTask.task_type === 'cleanup_files'">
+                  <p class="text-sm text-slate-400">最近一次清理</p>
+                  <div class="grid grid-cols-2 gap-2 mt-1 text-sm">
+                    <p class="text-slate-300" data-testid="detail-cleanup-last-run-stats" x-text="`扫描 ${selectedTask.params?.last_run?.scanned ?? 0} / 删除 ${selectedTask.params?.last_run?.deleted ?? 0}`"></p>
+                    <p class="text-slate-300" x-text="`释放 ${selectedTask.params?.last_run?.freed_bytes ? taskManager.formatFileSize(selectedTask.params.last_run.freed_bytes) : '0 B'}`"></p>
+                    <p class="text-slate-300" x-text="taskManager.formatTime(selectedTask.params?.last_run?.finished_at)"></p>
+                    <p class="text-slate-300" x-text="`耗时 ${taskManager.formatLastRunDuration(selectedTask.params?.last_run)}`"></p>
+                  </div>
+                </div>
               </div>
 
               <!-- 子任务统计 -->
@@ -627,6 +669,33 @@
               <div x-show="selectedTask.message" data-testid="detail-error-message-container" class="bg-red-900/20 border border-red-800/50 rounded-lg p-4">
                 <p class="text-xs text-red-400 uppercase tracking-wider font-medium mb-1">错误信息</p>
                 <p class="text-sm text-red-300 break-words" data-testid="detail-error-message" x-text="selectedTask.message"></p>
+              </div>
+
+              <!-- 定时清理操作按钮 -->
+              <div x-show="selectedTask.task_type === 'cleanup_files'" class="flex gap-2">
+                <button
+                  data-testid="btn-run-cleanup"
+                  @click="runTask(selectedTask.id)"
+                  class="btn btn-sm btn-primary flex-1"
+                >
+                  ▶ 立即清理
+                </button>
+                <button
+                  data-testid="btn-pause-cleanup"
+                  x-show="!selectedTask.params?.paused"
+                  @click="pauseTask(selectedTask.id)"
+                  class="btn btn-sm btn-warning flex-1"
+                >
+                  ⏸ 暂停调度
+                </button>
+                <button
+                  data-testid="btn-resume-cleanup"
+                  x-show="selectedTask.params?.paused"
+                  @click="resumeTask(selectedTask.id)"
+                  class="btn btn-sm btn-success flex-1"
+                >
+                  ▶ 恢复调度
+                </button>
               </div>
             </div>
           </div>
@@ -688,11 +757,15 @@
                   <input data-testid="input-task-type-listen-forward" type="radio" x-model="createForm.taskType" value="listen_forward" class="mr-2">
                   <span>📲 监听转发</span>
                 </label>
+                <label class="flex items-center cursor-pointer">
+                  <input data-testid="input-task-type-cleanup" type="radio" x-model="createForm.taskType" value="cleanup_files" class="mr-2">
+                  <span>🧹 定时清理</span>
+                </label>
               </div>
             </div>
 
             <!-- 源频道 -->
-            <div class="form-group">
+            <div class="form-group" x-show="createForm.taskType !== 'cleanup_files'">
               <label class="form-label">源频道</label>
               <div class="flex gap-2">
                 <input
@@ -770,7 +843,7 @@
             </div>
 
             <!-- 消息范围模式 -->
-            <div class="form-group" x-show="!createForm.taskType.startsWith('listen_')">
+            <div class="form-group" x-show="!createForm.taskType.startsWith('listen_') && createForm.taskType !== 'cleanup_files'">
               <label class="form-label">消息范围</label>
               <div class="flex flex-wrap gap-3 mb-3">
                 <label class="flex items-center cursor-pointer">
@@ -850,7 +923,7 @@
             </div>
 
             <!-- 类型过滤 -->
-            <div class="form-group">
+            <div class="form-group" x-show="createForm.taskType !== 'cleanup_files'">
               <label class="form-label">类型过滤</label>
               <div class="flex flex-wrap gap-3">
                 <template x-for="option in taskManager.getTypeFilterOptions()" :key="option.value">
@@ -869,7 +942,7 @@
             </div>
 
             <!-- 媒体大小过滤 -->
-            <div class="form-group" x-show="!createForm.taskType.startsWith('listen_')">
+            <div class="form-group" x-show="!createForm.taskType.startsWith('listen_') && createForm.taskType !== 'cleanup_files'">
               <label class="form-label">文件大小过滤（可选）</label>
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-400">最小</span>
@@ -886,6 +959,85 @@
                   <option value="GB">GB</option>
                 </select>
               </div>
+            </div>
+
+            <!-- 定时清理参数 -->
+            <div class="form-group" x-show="createForm.taskType === 'cleanup_files'">
+              <label class="form-label">保留天数</label>
+              <div class="flex flex-wrap gap-3">
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.keepDaysPreset" value="1" class="mr-2" data-testid="input-keep-days-preset-1">
+                  <span>1日</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.keepDaysPreset" value="3" class="mr-2" data-testid="input-keep-days-preset-3">
+                  <span>3日</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.keepDaysPreset" value="7" class="mr-2" data-testid="input-keep-days-preset-7">
+                  <span>7日</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.keepDaysPreset" value="30" class="mr-2" data-testid="input-keep-days-preset-30">
+                  <span>30日</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.keepDaysPreset" value="custom" class="mr-2" data-testid="input-keep-days-preset-custom">
+                  <span>自定义</span>
+                </label>
+              </div>
+              <div x-show="createForm.keepDaysPreset === 'custom'" class="mt-2 flex items-center gap-2">
+                <span class="text-sm text-slate-400">保留</span>
+                <input
+                  type="number"
+                  x-model="createForm.keepDays"
+                  class="form-input w-24"
+                  placeholder="天数"
+                  min="1"
+                  max="365"
+                  data-testid="input-keep-days-custom"
+                >
+                <span class="text-sm text-slate-400">天（1~365）</span>
+              </div>
+              <p class="text-xs text-slate-500 mt-2">将删除「最后修改时间」早于该天数的文件（跳过使用中的文件）</p>
+            </div>
+
+            <div class="form-group" x-show="createForm.taskType === 'cleanup_files'">
+              <label class="form-label">调度模式</label>
+              <div class="flex flex-wrap gap-3">
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.scheduleMode" value="daily" class="mr-2" data-testid="input-schedule-mode-daily">
+                  <span>每天固定时刻</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.scheduleMode" value="interval" class="mr-2" data-testid="input-schedule-mode-interval">
+                  <span>每隔 N 小时</span>
+                </label>
+              </div>
+              <div x-show="createForm.scheduleMode === 'daily'" class="mt-2 flex items-center gap-2">
+                <span class="text-sm text-slate-400">执行时刻</span>
+                <input type="time" x-model="createForm.scheduleTime" class="form-input w-32" data-testid="input-schedule-time">
+              </div>
+              <div x-show="createForm.scheduleMode === 'interval'" class="mt-2 flex items-center gap-2">
+                <span class="text-sm text-slate-400">每隔</span>
+                <input
+                  type="number"
+                  x-model="createForm.scheduleIntervalHours"
+                  class="form-input w-24"
+                  placeholder="小时"
+                  min="1"
+                  max="72"
+                  data-testid="input-schedule-interval-hours"
+                >
+                <span class="text-sm text-slate-400">小时（1~72）</span>
+              </div>
+            </div>
+
+            <div class="form-group" x-show="createForm.taskType === 'cleanup_files'">
+              <label class="flex items-center cursor-pointer">
+                <input type="checkbox" x-model="createForm.removeEmptyDirs" class="mr-2" data-testid="input-remove-empty-dirs">
+                <span>同时清理删除后产生的空目录</span>
+              </label>
             </div>
 
             <!-- 错误提示 -->
@@ -1159,7 +1311,7 @@
 
           if (action === 'create') {
             // 设置任务类型
-            if (type && ['download', 'forward', 'listen_download', 'listen_forward'].includes(type)) {
+            if (type && ['download', 'forward', 'listen_download', 'listen_forward', 'cleanup_files'].includes(type)) {
               this.createForm.taskType = type;
               taskManager.createForm.taskType = type;
             }
@@ -1389,6 +1541,36 @@
             this.addNotification('success', '任务已重试');
           } catch (error) {
             this.addNotification('error', `重试失败: ${error.message}`);
+          }
+          await this.refreshTasks();
+        },
+
+        async runTask(taskId) {
+          try {
+            await taskManager.runTask(taskId);
+            this.addNotification('success', '已触发立即清理');
+          } catch (error) {
+            this.addNotification('error', `立即清理失败: ${error.message}`);
+          }
+          await this.refreshTasks();
+        },
+
+        async pauseTask(taskId) {
+          try {
+            await taskManager.pauseTask(taskId);
+            this.addNotification('success', '已暂停定时清理');
+          } catch (error) {
+            this.addNotification('error', `暂停失败: ${error.message}`);
+          }
+          await this.refreshTasks();
+        },
+
+        async resumeTask(taskId) {
+          try {
+            await taskManager.resumeTask(taskId);
+            this.addNotification('success', '已恢复定时清理');
+          } catch (error) {
+            this.addNotification('error', `恢复失败: ${error.message}`);
           }
           await this.refreshTasks();
         },
