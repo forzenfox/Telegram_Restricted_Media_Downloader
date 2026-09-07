@@ -46,10 +46,9 @@ class TaskManager {
    */
   _resetCreateForm() {
     return {
-      taskType: "download", // download, forward, upload, listen_download, listen_forward
+      taskType: "download", // download, forward, listen_download, listen_forward
       sourceChat: "",
       targetChat: "",
-      selectedFiles: [],
       messageRangeMode: "id_range", // date_range, id_range, multiple_ids, all, recent
       startDate: "",
       endDate: "",
@@ -62,7 +61,6 @@ class TaskManager {
       maxSize: "",
       minSizeUnit: "MB",
       maxSizeUnit: "MB",
-      deleteAfterUpload: true, // 默认上传后删除本地文件（符合设计文档 4.2.1.3）
     };
   }
 
@@ -265,11 +263,6 @@ class TaskManager {
         params.filter_types = this.createForm.typeFilters;
       }
       _addSizeFilter();
-    } else if (this.createForm.taskType === "upload") {
-      // 使用 targetChat（handleCreateTask 已确保是解析后的数字 ID）
-      params.chat_id = this.createForm.targetChat;
-      params.file_paths = this.createForm.selectedFiles || [];
-      params.delete_after_upload = this.createForm.deleteAfterUpload;
     } else if (this.createForm.taskType === "listen_download") {
       if (typeof this.createForm.sourceChat === "number") {
         params.chat_id = this.createForm.sourceChat;
@@ -673,7 +666,6 @@ class TaskManager {
     // 验证目标频道
     if (
       (form.taskType === "forward" ||
-        form.taskType === "upload" ||
         form.taskType === "listen_forward") &&
       !form.targetChat
     ) {
@@ -681,7 +673,7 @@ class TaskManager {
     }
 
     // 验证消息范围（监听任务无需消息范围，与 HTML 显示逻辑一致）
-    if (form.taskType !== "upload" && !form.taskType.startsWith("listen_")) {
+    if (!form.taskType.startsWith("listen_")) {
       if (form.messageRangeMode === "date_range") {
         if (!form.startDate || !form.endDate) {
           errors.push("请选择日期范围");
@@ -711,14 +703,6 @@ class TaskManager {
           errors.push("消息数量不能超过 1000 条");
         }
       }
-    }
-
-    // 验证上传文件
-    if (
-      form.taskType === "upload" &&
-      (!form.selectedFiles || form.selectedFiles.length === 0)
-    ) {
-      errors.push("请选择至少一个文件");
     }
 
     return errors;

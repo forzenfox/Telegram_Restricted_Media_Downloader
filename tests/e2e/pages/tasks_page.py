@@ -87,7 +87,6 @@ class TasksPage(BasePage):
     # 创建任务表单
     INPUT_TASK_TYPE_DOWNLOAD = "input-task-type-download"
     INPUT_TASK_TYPE_FORWARD = "input-task-type-forward"
-    INPUT_TASK_TYPE_UPLOAD = "input-task-type-upload"
     INPUT_TASK_TYPE_LISTEN_DOWNLOAD = "input-task-type-listen-download"
     INPUT_TASK_TYPE_LISTEN_FORWARD = "input-task-type-listen-forward"
     INPUT_SOURCE_CHAT = "input-source-chat"
@@ -323,12 +322,11 @@ class TasksPage(BasePage):
         选择任务类型
 
         Args:
-            task_type: 任务类型（download/forward/upload/listen_download/listen_forward）
+            task_type: 任务类型（download/forward/listen_download/listen_forward）
         """
         type_map = {
             "download": self.INPUT_TASK_TYPE_DOWNLOAD,
             "forward": self.INPUT_TASK_TYPE_FORWARD,
-            "upload": self.INPUT_TASK_TYPE_UPLOAD,
             "listen_download": self.INPUT_TASK_TYPE_LISTEN_DOWNLOAD,
             "listen_forward": self.INPUT_TASK_TYPE_LISTEN_FORWARD,
         }
@@ -719,7 +717,6 @@ class TasksPage(BasePage):
 
     def is_type_filter_checkbox_visible(self) -> bool:
         """检查类型过滤checkbox组是否可见"""
-        # 类型过滤区域在非upload类型时可见
         # 通过检查checkbox输入元素是否存在
         return (
             self.page.locator(
@@ -760,11 +757,11 @@ class TasksPage(BasePage):
     # ========== 弹窗内表单条件可见性 ==========
 
     def is_target_chat_visible(self) -> bool:
-        """检查目标频道输入框是否可见（转发/上传/监听转发类型时可见）"""
+        """检查目标频道输入框是否可见（转发/监听转发类型时可见）"""
         return self.is_visible_by_testid(self.INPUT_TARGET_CHAT)
 
     def is_range_mode_section_visible(self) -> bool:
-        """检查消息范围模式区域是否可见（非上传且非监听类型时可见）"""
+        """检查消息范围模式区域是否可见（非监听类型时可见）"""
         return self.is_visible_by_testid(self.INPUT_RANGE_MODE_ID)
 
     def is_date_inputs_visible(self) -> bool:
@@ -780,7 +777,7 @@ class TasksPage(BasePage):
         return self.is_visible_by_testid(self.INPUT_RECENT_COUNT)
 
     def is_source_chat_visible(self) -> bool:
-        """检查源频道输入框是否可见（非上传类型时可见）"""
+        """检查源频道输入框是否可见（所有创建类型均显示）"""
         return self.is_visible_by_testid(self.INPUT_SOURCE_CHAT)
 
     # ========== 分页 ==========
@@ -862,7 +859,7 @@ class TasksPage(BasePage):
         打开创建弹窗并选择任务类型
 
         Args:
-            task_type: 任务类型（download/forward/upload/listen_download/listen_forward）
+            task_type: 任务类型（download/forward/listen_download/listen_forward）
         """
         self.click_create_task()
         self.wait_for_create_modal()

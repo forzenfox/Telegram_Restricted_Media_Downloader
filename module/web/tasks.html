@@ -681,10 +681,6 @@
                   <span>转发</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input data-testid="input-task-type-upload" type="radio" x-model="createForm.taskType" value="upload" class="mr-2">
-                  <span>上传</span>
-                </label>
-                <label class="flex items-center cursor-pointer">
                   <input data-testid="input-task-type-listen-download" type="radio" x-model="createForm.taskType" value="listen_download" class="mr-2">
                   <span>🕵️ 监听下载</span>
                 </label>
@@ -696,7 +692,7 @@
             </div>
 
             <!-- 源频道 -->
-            <div class="form-group" x-show="createForm.taskType !== 'upload'">
+            <div class="form-group">
               <label class="form-label">源频道</label>
               <div class="flex gap-2">
                 <input
@@ -736,7 +732,7 @@
             </div>
 
             <!-- 目标频道 -->
-            <div class="form-group" x-show="createForm.taskType === 'forward' || createForm.taskType === 'upload' || createForm.taskType === 'listen_forward'">
+            <div class="form-group" x-show="createForm.taskType === 'forward' || createForm.taskType === 'listen_forward'">
               <label class="form-label">目标频道</label>
               <div class="flex gap-2">
                 <input
@@ -773,85 +769,8 @@
               <div x-show="resolveTargetError" class="mt-2 text-sm text-red-400" x-text="resolveTargetError"></div>
             </div>
 
-            <!-- 文件选择（仅上传任务） -->
-            <div class="form-group" x-show="createForm.taskType === 'upload'">
-              <div class="flex items-center justify-between mb-2">
-                <label class="form-label mb-0">选择文件</label>
-                <div class="flex gap-2">
-                  <button type="button" @click="loadFileList()" :disabled="fileListLoading"
-                          class="btn btn-secondary btn-sm">
-                    <span x-show="!fileListLoading">🔄 刷新</span>
-                    <span x-show="fileListLoading" class="flex items-center gap-1">
-                      <span class="spinner spinner-sm"></span> 加载中...
-                    </span>
-                  </button>
-                  <button type="button" @click="toggleSelectAll()"
-                          class="btn btn-secondary btn-sm"
-                          x-show="fileList.length > 0">
-                    <span x-text="allSelected ? '取消全选' : '全选'"></span>
-                  </button>
-                </div>
-              </div>
-
-              <!-- 文件列表容器 -->
-              <div data-testid="file-list-container"
-                   class="border border-slate-600 rounded-lg bg-slate-900/50 max-h-64 overflow-y-auto">
-                <!-- 空状态 -->
-                <div x-show="fileList.length === 0 && !fileListLoading"
-                     class="p-4 text-center text-slate-500 text-sm">
-                  <p>下载目录为空或加载失败</p>
-                  <p class="text-xs mt-1" x-text="'路径: ' + (fileListPath || '未知')"></p>
-                </div>
-
-                <!-- 加载状态 -->
-                <div x-show="fileListLoading" class="p-4 text-center text-slate-400">
-                  <span class="spinner spinner-sm"></span> 正在加载文件列表...
-                </div>
-
-                <!-- 文件列表 -->
-                <template x-for="file in fileList" :key="file.path">
-                  <label class="flex items-center px-3 py-2 hover:bg-slate-800 cursor-pointer border-b border-slate-700/50 last:border-b-0">
-                    <input type="checkbox"
-                           :value="file.path"
-                           @change="toggleFileSelection(file.path)"
-                           :checked="selectedFiles.includes(file.path)"
-                           class="mr-3 rounded">
-                    <div class="flex-1 min-w-0">
-                      <div class="text-sm text-slate-200 truncate" x-text="file.name"></div>
-                      <div class="text-xs text-slate-500">
-                        <span x-text="formatFileSize(file.size)"></span>
-                        <span class="mx-1">·</span>
-                        <span x-text="formatDateTime(file.modified_at)"></span>
-                      </div>
-                    </div>
-                  </label>
-                </template>
-              </div>
-
-              <!-- 已选文件统计 -->
-              <div class="flex items-center justify-between mt-2 text-xs">
-                <span class="text-slate-400">
-                  已选择 <span class="text-blue-400 font-medium" x-text="selectedFiles.length"></span> 个文件
-                </span>
-                <span class="text-slate-500" x-show="selectedFiles.length > 0">
-                  总计 <span x-text="formatFileSize(selectedTotalSize)"></span>
-                </span>
-              </div>
-
-              <!-- 上传后删除本地文件 -->
-              <div class="form-group mb-0 mt-3">
-                <label class="flex items-center cursor-pointer text-sm">
-                  <input type="checkbox"
-                         x-model="createForm.deleteAfterUpload"
-                         class="mr-2 rounded"
-                         data-testid="upload-delete-after-checkbox">
-                  <span>上传后删除本地文件</span>
-                </label>
-              </div>
-            </div>
-
             <!-- 消息范围模式 -->
-            <div class="form-group" x-show="createForm.taskType !== 'upload' && !createForm.taskType.startsWith('listen_')">
+            <div class="form-group" x-show="!createForm.taskType.startsWith('listen_')">
               <label class="form-label">消息范围</label>
               <div class="flex flex-wrap gap-3 mb-3">
                 <label class="flex items-center cursor-pointer">
@@ -931,7 +850,7 @@
             </div>
 
             <!-- 类型过滤 -->
-            <div class="form-group" x-show="createForm.taskType !== 'upload'">
+            <div class="form-group">
               <label class="form-label">类型过滤</label>
               <div class="flex flex-wrap gap-3">
                 <template x-for="option in taskManager.getTypeFilterOptions()" :key="option.value">
@@ -950,7 +869,7 @@
             </div>
 
             <!-- 媒体大小过滤 -->
-            <div class="form-group" x-show="createForm.taskType !== 'upload' && !createForm.taskType.startsWith('listen_')">
+            <div class="form-group" x-show="!createForm.taskType.startsWith('listen_')">
               <label class="form-label">文件大小过滤（可选）</label>
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-400">最小</span>
@@ -1161,9 +1080,7 @@
           taskType: 'download',
           sourceChat: '',
           targetChat: '',
-          selectedFiles: [],
           messageRangeMode: 'id_range',
-          deleteAfterUpload: true,
           minId: 0,
           maxId: 0,
           startDate: '',
@@ -1198,17 +1115,6 @@
         resourceSuggestion: '',
         resourceEstimate: null,
 
-        // 文件列表相关状态（上传任务用）
-        fileList: [],
-        fileListLoading: false,
-        fileListPath: '',
-        allSelected: false,
-
-        // HTML 模板直接引用 selectedFiles，代理到 createForm.selectedFiles
-        get selectedFiles() {
-          return this.createForm.selectedFiles;
-        },
-
         // 分页响应式镜像（taskManager.totalPages/totalTasks/page 是非响应式全局对象，
         // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 x-show/x-text 更新）
         totalPages: 0,
@@ -1240,18 +1146,11 @@
 
           // 启动智能轮询（替代固定5秒轮询）
           taskManager.startSmartPolling();
-
-          // 监听任务类型变化，切换到上传时自动加载文件列表
-          this.$watch('createForm.taskType', async (newType) => {
-            if (newType === 'upload' && this.fileList.length === 0) {
-              await this.loadFileList();
-            }
-          });
         },
 
         /**
          * 处理 URL 参数，支持从 Dashboard 快捷操作跳转
-         * 支持参数: ?action=create&type=download|forward|upload|listen_download|listen_forward
+         * 支持参数: ?action=create&type=download|forward|listen_download|listen_forward
          */
         _handleUrlParams() {
           const params = new URLSearchParams(window.location.search);
@@ -1260,7 +1159,7 @@
 
           if (action === 'create') {
             // 设置任务类型
-            if (type && ['download', 'forward', 'upload', 'listen_download', 'listen_forward'].includes(type)) {
+            if (type && ['download', 'forward', 'listen_download', 'listen_forward'].includes(type)) {
               this.createForm.taskType = type;
               taskManager.createForm.taskType = type;
             }
@@ -1497,28 +1396,8 @@
         async handleCreateTask() {
           this.createFormError = null;
 
-          // 对于上传任务，确保 targetChat 是数字 ID
-          if (this.createForm.taskType === 'upload') {
-            // 如果 targetChat 不是数字，自动解析
-            if (typeof this.createForm.targetChat !== 'number' && this.createForm.targetChat) {
-              console.log('[Upload] targetChat 不是数字，自动解析:', this.createForm.targetChat);
-              try {
-                this.resolveTargetLoading = true;
-                const result = await api.resolveChat(this.createForm.targetChat);
-                this.resolveTargetResult = result;
-                this.createForm.targetChat = Number(result.chat_id);
-                this.resolveTargetLoading = false;
-                // 同步到 taskManager
-                taskManager.createForm.targetChat = this.createForm.targetChat;
-              } catch (error) {
-                this.createFormError = `目标频道解析失败：${error.message}`;
-                return;
-              }
-            }
-          }
-
           // 对于下载/转发/监听任务，确保 sourceChat 是数字 ID
-          if (this.createForm.taskType !== 'upload' && this.createForm.sourceChat) {
+          if (this.createForm.sourceChat) {
             if (typeof this.createForm.sourceChat !== 'number') {
               console.log('[Source] sourceChat 不是数字，自动解析:', this.createForm.sourceChat);
               try {
@@ -1614,108 +1493,6 @@
             .split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0).length;
-        },
-
-        // ==================== 文件列表相关方法（上传任务） ====================
-
-        /**
-         * 加载下载目录文件列表
-         */
-        async loadFileList() {
-          this.fileListLoading = true;
-          try {
-            const result = await api.getFiles('');
-            if (result && result.items) {
-              // 只显示文件，不显示子目录
-              this.fileList = result.items.filter(item => item.type === 'file');
-              this.fileListPath = result.path || '';
-            } else {
-              this.fileList = [];
-              this.fileListPath = '';
-            }
-          } catch (error) {
-            console.error('加载文件列表失败:', error);
-            this.fileList = [];
-            this.fileListPath = '';
-          } finally {
-            this.fileListLoading = false;
-          }
-        },
-
-        /**
-         * 切换单个文件的选择状态
-         */
-        toggleFileSelection(filePath) {
-          const index = this.createForm.selectedFiles.indexOf(filePath);
-          if (index === -1) {
-            this.createForm.selectedFiles.push(filePath);
-          } else {
-            this.createForm.selectedFiles.splice(index, 1);
-          }
-          this._updateAllSelectedState();
-        },
-
-        /**
-         * 全选/取消全选
-         */
-        toggleSelectAll() {
-          if (this.allSelected) {
-            this.createForm.selectedFiles = [];
-          } else {
-            this.createForm.selectedFiles = this.fileList.map(f => f.path);
-          }
-          this._updateAllSelectedState();
-        },
-
-        /**
-         * 更新全选状态
-         */
-        _updateAllSelectedState() {
-          if (this.fileList.length === 0) {
-            this.allSelected = false;
-            return;
-          }
-          this.allSelected = this.fileList.every(f =>
-            this.createForm.selectedFiles.includes(f.path)
-          );
-        },
-
-        /**
-         * 已选文件总大小（计算属性）
-         */
-        get selectedTotalSize() {
-          return this.fileList
-            .filter(f => this.createForm.selectedFiles.includes(f.path))
-            .reduce((sum, f) => sum + (f.size || 0), 0);
-        },
-
-        /**
-         * 格式化文件大小
-         */
-        formatFileSize(bytes) {
-          if (!bytes || bytes === 0) return '0 B';
-          const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-          let i = 0;
-          let size = bytes;
-          while (size >= 1024 && i < units.length - 1) {
-            size /= 1024;
-            i++;
-          }
-          return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
-        },
-
-        /**
-         * 格式化日期时间
-         */
-        formatDateTime(isoString) {
-          if (!isoString) return '';
-          const date = new Date(isoString);
-          const y = date.getFullYear();
-          const m = String(date.getMonth() + 1).padStart(2, '0');
-          const d = String(date.getDate()).padStart(2, '0');
-          const h = String(date.getHours()).padStart(2, '0');
-          const min = String(date.getMinutes()).padStart(2, '0');
-          return `${y}-${m}-${d} ${h}:${min}`;
         },
       };
     }

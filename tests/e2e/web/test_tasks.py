@@ -301,30 +301,6 @@ class TestForwardTaskForm:
         assert tasks_page.is_target_chat_visible()
 
 
-class TestUploadTaskForm:
-    """T008: 上传任务表单场景"""
-
-    def test_upload_type_hides_source_chat(
-        self, tasks_page: TasksPage, test_token: str, live_server: str
-    ):
-        """T008-1: 上传类型隐藏源频道输入框"""
-        tasks_page.navigate(live_server)
-        tasks_page.wait_for_page_loaded()
-        tasks_page.open_create_modal_with_type("upload")
-        tasks_page.wait_for_timeout(500)
-        assert not tasks_page.is_source_chat_visible()
-
-    def test_upload_type_shows_target_chat(
-        self, tasks_page: TasksPage, test_token: str, live_server: str
-    ):
-        """T008-2: 上传类型显示目标频道输入框"""
-        tasks_page.navigate(live_server)
-        tasks_page.wait_for_page_loaded()
-        tasks_page.open_create_modal_with_type("upload")
-        tasks_page.wait_for_timeout(500)
-        assert tasks_page.is_target_chat_visible()
-
-
 class TestListenDownloadTaskForm:
     """T009: 监听下载任务表单场景"""
 
@@ -1209,26 +1185,6 @@ class TestForwardTargetRequired:
 
         has_error = tasks_page.has_create_form_error()
         assert has_error, "转发类型不填目标频道应触发验证错误"
-
-
-class TestUploadTargetRequired:
-    """T041: 上传类型必填目标频道场景"""
-
-    def test_upload_empty_target_shows_error(
-        self, tasks_page: TasksPage, test_token: str, live_server: str
-    ):
-        """T041-1: 上传类型不填目标频道触发验证错误"""
-        tasks_page.navigate(live_server)
-        tasks_page.wait_for_page_loaded()
-        tasks_page.open_create_modal_with_type("upload")
-        tasks_page.wait_for_timeout(500)
-
-        # 不填目标频道直接提交
-        tasks_page.click_submit_create()
-        tasks_page.wait_for_timeout(1000)
-
-        has_error = tasks_page.has_create_form_error()
-        assert has_error, "上传类型不填目标频道应触发验证错误"
 
 
 # ========== P2辅助场景补充 ==========
