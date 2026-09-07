@@ -68,6 +68,19 @@ class TestTaskParams:
         assert params.source_identifier == "@source"
         assert params.target_identifier == "@target"
 
+    def test_source_and_target_identifier_accept_numeric_chat_id(self):
+        """解析后的数值型 chat_id（如 -100... 频道）也应被接受。
+
+        前端"解析"流程会把 targetChat 转成 Number 后回填，
+        再以 target_identifier 提交，类型必须兼容 int。
+        """
+        params = TaskParams(
+            source_identifier=8319063445,
+            target_identifier=-1003920688925,
+        )
+        assert params.source_identifier == 8319063445
+        assert params.target_identifier == -1003920688925
+
     def test_recent_mode_requires_count(self):
         """range_mode="recent" 时 recent_count 必须大于 0。"""
         with pytest.raises(ValidationError) as exc_info:
