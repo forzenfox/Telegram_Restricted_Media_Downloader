@@ -2499,6 +2499,72 @@ class TestPhase3HandleListenForward:
         assert len(updated.items) == 0
         mock_client.copy_message.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_handle_listen_forward_restricted_falls_back(
+        self, task_manager, mock_client, mock_downloader, mock_file_manager
+    ):
+        """监听转发遇到内容保护频道（受限转发）时应降级为下载后上传。
+
+        降级下载的临时文件默认在转发完成后删除（delete_after_forward 默认 True）
+        """
+        from module.core.download.file_manager import UploadResult
+
+        mock_client.copy_message = AsyncMock(
+            side_effect=ChatForwardsRestricted_400(
+                value={
+                    "rpc_error_code": 400,
+                    "description": "Can't forward messages from a protected chat",
+                }
+            )
+        )
+        mock_downloader.download_range = AsyncMock(
+            return_value=(["/downloads/protected.mp4"], {})
+        )
+        mock_file_manager.upload = AsyncMock(
+            return_value=UploadResult(
+                success=True,
+                message=MagicMock(id=888),
+                error_msg=None,
+            )
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+            downloader=mock_downloader,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+                "target_chat_id": -1002000000000,
+                "delete_after_forward": True,
+            },
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.video = MagicMock()
+        mock_message.media.video.file_unique_id = "uniq123"
+
+        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
+
+        # 验证降级下载被触发
+        mock_downloader.download_range.assert_called_once()
+        # 上传到目标频道，且默认删除临时文件
+        upload_call = mock_file_manager.upload.call_args
+        assert upload_call[1]["chat_id"] == -1002000000000
+        assert upload_call[1]["delete_after"] is True
+        # 子任务标记为成功并记录上传消息 ID
+        updated = await task_manager.get_task(task.task_id)
+        item = updated.items[0]
+        assert item.status == ItemStatus.SUCCESS
+        assert item.uploaded_message_id == 888
+
 
 # ============================================================
 # 测试：Phase 3 - recover_listeners()
@@ -3710,6 +3776,8 @@ class TestForwardRestrictedFallback:
         # 上传到目标频道
         upload_call = mock_file_manager.upload.call_args
         assert upload_call[1]["chat_id"] == -1009998887777
+        # 受限降级转发的临时文件默认删除（delete_after_forward 默认 True）
+        assert upload_call[1]["delete_after"] is True
         # 子任务标记为成功并记录上传消息 ID
         updated = await task_manager.get_task(task.task_id)
         assert updated.status == TaskStatus.COMPLETED

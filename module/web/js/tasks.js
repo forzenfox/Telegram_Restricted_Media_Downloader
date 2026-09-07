@@ -63,6 +63,7 @@ class TaskManager {
       minSizeUnit: "MB",
       maxSizeUnit: "MB",
       deleteAfterUpload: true, // 默认上传后删除本地文件（符合设计文档 4.2.1.3）
+      deleteAfterForward: true, // 默认转发后删除临时文件（受限转发降级下载的文件）
     };
   }
 
@@ -259,6 +260,8 @@ class TaskManager {
         params.source_identifier = this.createForm.sourceChat;
       }
       params.forward_target = this.createForm.targetChat;
+      // 受限转发降级下载的临时文件，转发后是否删除
+      params.delete_after_forward = this.createForm.deleteAfterForward;
       _flattenRange(this._buildMessageRange());
       // 类型过滤
       if (this.createForm.typeFilters.length > 0) {
@@ -286,6 +289,8 @@ class TaskManager {
         params.source_identifier = this.createForm.sourceChat;
       }
       params.target_identifier = this.createForm.targetChat;
+      // 受限转发降级下载的临时文件，转发后是否删除
+      params.delete_after_forward = this.createForm.deleteAfterForward;
       if (this.createForm.typeFilters.length > 0) {
         params.media_types = this.createForm.typeFilters;
       }

@@ -25,6 +25,7 @@ class TaskParams(BaseModel):
     min_size: Optional[int] = None
     max_size: Optional[int] = None
     enable_repository_backup: Optional[bool] = None
+    delete_after_forward: Optional[bool] = None
 
     model_config = ConfigDict(extra="allow")
 

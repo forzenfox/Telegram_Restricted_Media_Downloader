@@ -564,6 +564,12 @@
                   <p class="text-white mt-1 text-sm" data-testid="detail-delete-after-upload" x-text="taskManager.formatBoolean(selectedTask.params?.delete_after_upload)"></p>
                 </div>
 
+                <!-- 转发/监听转发任务：转发后删除本地文件 -->
+                <div x-show="selectedTask.task_type === 'forward' || selectedTask.task_type === 'listen_forward'">
+                  <p class="text-sm text-slate-400">转发后删除本地文件</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-delete-after-forward" x-text="taskManager.formatBoolean(selectedTask.params?.delete_after_forward)"></p>
+                </div>
+
                 <!-- 监听任务：媒体类型 -->
                 <div x-show="selectedTask.task_type?.startsWith('listen_')">
                   <p class="text-sm text-slate-400">监听媒体类型</p>
@@ -771,6 +777,18 @@
                 </div>
               </template>
               <div x-show="resolveTargetError" class="mt-2 text-sm text-red-400" x-text="resolveTargetError"></div>
+            </div>
+
+            <!-- 转发后删除本地文件（转发/监听转发任务；受限转发降级下载的文件及时清理） -->
+            <div class="form-group mb-0" x-show="createForm.taskType === 'forward' || createForm.taskType === 'listen_forward'">
+              <label class="flex items-center cursor-pointer text-sm">
+                <input type="checkbox"
+                       x-model="createForm.deleteAfterForward"
+                       class="mr-2 rounded"
+                       data-testid="forward-delete-after-checkbox">
+                <span>转发后删除本地文件</span>
+              </label>
+              <p class="text-xs text-slate-500 mt-1">内容保护频道降级转发时，完成后删除下载的临时文件，及时清理服务器磁盘空间</p>
             </div>
 
             <!-- 文件选择（仅上传任务） -->
@@ -1164,6 +1182,7 @@
           selectedFiles: [],
           messageRangeMode: 'id_range',
           deleteAfterUpload: true,
+          deleteAfterForward: true,
           minId: 0,
           maxId: 0,
           startDate: '',

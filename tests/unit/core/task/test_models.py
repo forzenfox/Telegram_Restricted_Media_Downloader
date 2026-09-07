@@ -121,6 +121,13 @@ class TestTaskParams:
         params = TaskParams(enable_repository_backup=True)
         assert params.enable_repository_backup is True
 
+    def test_delete_after_forward(self):
+        """delete_after_forward（转发后删除本地文件）应被接受。"""
+        params = TaskParams(delete_after_forward=False)
+        assert params.delete_after_forward is False
+        params = TaskParams(delete_after_forward=True)
+        assert params.delete_after_forward is True
+
 
 # ==================== TaskCreate 兼容性 ====================
 
