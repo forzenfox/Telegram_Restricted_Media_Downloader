@@ -585,11 +585,25 @@ class TaskExecutor:
                     # 分发失败，降级直接转发
 
             # 直接转发到目标频道（非仓库模式或降级）
-            result_message = await client.copy_message(
-                chat_id=target_chat_id,
-                from_chat_id=chat_id,
-                message_id=source_id,
-            )
+            # 受限转发（内容保护频道）时降级为下载后上传
+            try:
+                result_message = await client.copy_message(
+                    chat_id=target_chat_id,
+                    from_chat_id=chat_id,
+                    message_id=source_id,
+                )
+            except (ChatForwardsRestricted_400, ChatForwardsRestricted_406):
+                uploaded_msg_id = await self._download_then_upload_forward(
+                    task, item, chat_id, target_chat_id
+                )
+                await self._task_manager.update_item_status(
+                    task_id,
+                    item_id,
+                    ItemStatus.SUCCESS,
+                    target_chat_id=target_chat_id,
+                    uploaded_message_id=uploaded_msg_id,
+                )
+                return
             await self._task_manager.update_item_status(
                 task_id,
                 item_id,
@@ -1654,11 +1668,16 @@ class TaskExecutor:
 
         # 2. 上传到目标频道
         uploaded_msg_id: int | None = None
+        # 转发产生的临时文件默认在完成后删除（及时清理云服务器磁盘空间）
+        delete_after = task.params.get(
+            "delete_after_forward",
+            task.params.get("delete_after_upload", True),
+        )
         for file_path in downloaded_files:
             upload_result = await self._file_manager.upload(
                 file_path=file_path,
                 chat_id=target_chat_id,
-                delete_after=task.params.get("delete_after_upload", False),
+                delete_after=delete_after,
                 source_chat_id=chat_id,
                 source_message_id=item.source_message_id,
             )

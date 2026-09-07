@@ -68,6 +68,19 @@ class TestTaskParams:
         assert params.source_identifier == "@source"
         assert params.target_identifier == "@target"
 
+    def test_source_and_target_identifier_accept_numeric_chat_id(self):
+        """解析后的数值型 chat_id（如 -100... 频道）也应被接受。
+
+        前端"解析"流程会把 targetChat 转成 Number 后回填，
+        再以 target_identifier 提交，类型必须兼容 int。
+        """
+        params = TaskParams(
+            source_identifier=8319063445,
+            target_identifier=-1003920688925,
+        )
+        assert params.source_identifier == 8319063445
+        assert params.target_identifier == -1003920688925
+
     def test_recent_mode_requires_count(self):
         """range_mode="recent" 时 recent_count 必须大于 0。"""
         with pytest.raises(ValidationError) as exc_info:
@@ -107,6 +120,13 @@ class TestTaskParams:
         """enable_repository_backup 应被接受。"""
         params = TaskParams(enable_repository_backup=True)
         assert params.enable_repository_backup is True
+
+    def test_delete_after_forward(self):
+        """delete_after_forward（转发后删除本地文件）应被接受。"""
+        params = TaskParams(delete_after_forward=False)
+        assert params.delete_after_forward is False
+        params = TaskParams(delete_after_forward=True)
+        assert params.delete_after_forward is True
 
 
 # ==================== TaskCreate 兼容性 ====================

@@ -233,6 +233,10 @@ async def create_task(
         "max_size": params.get("max_size"),
         "enable_repository_backup": params.get("enable_repository_backup"),
     }
+    # 转发/监听转发任务：受限转发降级下载后上传产生的临时文件，完成后是否删除
+    # （默认删除，及时清理云服务器磁盘空间）
+    if task_type in (TaskType.FORWARD, TaskType.LISTEN_FORWARD):
+        task_params["delete_after_forward"] = params.get("delete_after_forward", True)
     # source_identifier 存在时交给 TaskManager 解析，不要设置 chat_id；否则使用 chat_id 回退
     if source_identifier:
         task_params["source_identifier"] = source_identifier
