@@ -1529,12 +1529,16 @@ class TestBuildReferencedPaths:
             )
             await session.commit()
 
+        def _norm(p: str) -> str:
+            """与 build_referenced_paths 相同的规范化方式（平台无关）。"""
+            return os.path.abspath(os.path.normpath(p))
+
         referenced = await task_manager.build_referenced_paths()
-        assert "/tmp/run/up.mp4" in referenced
-        assert "/tmp/run/up2.mp4" in referenced
-        assert "/tmp/run/dl.mp4" in referenced
+        assert _norm("/tmp/run/up.mp4") in referenced
+        assert _norm("/tmp/run/up2.mp4") in referenced
+        assert _norm("/tmp/run/dl.mp4") in referenced
         # .temp 兜底（下载中的中间文件）
-        assert "/tmp/run/dl.mp4.temp" in referenced
+        assert _norm("/tmp/run/dl.mp4.temp") in referenced
 
     @pytest.mark.asyncio
     async def test_excludes_cleanup_tasks_and_completed(self, task_manager):
