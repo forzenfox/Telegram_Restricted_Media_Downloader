@@ -10,9 +10,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Query
 
-from module.api.dependencies import require_token, get_file_manager, get_config_manager
+from module.api.dependencies import (
+    require_token,
+    get_file_manager,
+    get_config_manager,
+    get_task_manager,
+)
 from module.api.responses import json_response, error_json_response
-from module.api.models.file import FileInfo, FileUploadRequest
+from module.api.models.file import (
+    FileInfo,
+    FileUploadRequest,
+    FileBatchDeleteRequest,
+)
 
 router = APIRouter(prefix="/files", tags=["文件"])
 
@@ -44,24 +53,20 @@ async def list_files(
         base_dir = os.path.abspath("downloads")
 
     # 前端路径格式为虚拟路径（'/' 表示根目录，'/subdir' 表示子目录）
-    # 需要映射到实际的下载根目录下；同时支持绝对路径直接访问
+    # 需要映射到实际的下载根目录下
     if not path or path == "/":
         # 根路径：使用下载根目录
         target_path = base_dir
-    elif os.path.isabs(path):
-        # 绝对路径：直接使用（如按绝对路径浏览下载目录）
-        target_path = os.path.abspath(path)
     else:
-        # 子路径：基于下载根目录拼接
+        # 子路径：基于下载根目录拼接，防止路径穿越
         # 去掉开头的 '/'，然后拼接
         relative_path = path.lstrip("/")
         target_path = os.path.abspath(os.path.join(base_dir, relative_path))
-
-    # 安全检查：确保目标路径在下载根目录下，防止路径穿越攻击
-    if not target_path.startswith(base_dir):
-        return json_response(
-            data={"path": target_path, "items": [], "error": "非法路径"}
-        )
+        # 安全检查：确保目标路径在下载根目录下，防止路径穿越攻击
+        if not target_path.startswith(base_dir):
+            return json_response(
+                data={"path": target_path, "items": [], "error": "非法路径"}
+            )
 
     if not os.path.exists(target_path):
         return json_response(data={"path": target_path, "items": []})
@@ -289,3 +294,39 @@ async def upload_files(
 
     except Exception as e:
         return error_json_response("上传失败", str(e))
+
+
+@router.delete("/batch")
+async def delete_files_batch(
+    request: Request,
+    body: FileBatchDeleteRequest,
+    token: str = Depends(require_token),
+):
+    """批量删除本地文件（仅支持文件，路径须位于下载根目录内）。
+
+    安全机制：路径边界预检 + 系统目录黑名单 + 任务引用保护。
+    被活跃（pending/queued/running）任务引用的文件将被跳过（skipped）。
+
+    :param request: FastAPI 请求对象
+    :param body: 批量删除请求体
+    :param token: 认证 Token
+    :return: 删除统计与逐条结果
+    """
+    file_manager = get_file_manager(request)
+    if not file_manager:
+        return error_json_response("文件管理服务不可用")
+
+    config_manager = get_config_manager(request)
+    save_root = os.path.abspath(config_manager.save_directory or "downloads")
+
+    task_manager = get_task_manager(request)
+    referenced_paths: set[str] = set()
+    if task_manager is not None:
+        referenced_paths = await task_manager.build_referenced_paths()
+
+    stats = await file_manager.delete_many(
+        body.file_paths,
+        save_root=save_root,
+        referenced_paths=referenced_paths,
+    )
+    return json_response(data=stats)

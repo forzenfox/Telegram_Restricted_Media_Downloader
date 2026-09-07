@@ -2499,72 +2499,6 @@ class TestPhase3HandleListenForward:
         assert len(updated.items) == 0
         mock_client.copy_message.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_handle_listen_forward_restricted_falls_back(
-        self, task_manager, mock_client, mock_downloader, mock_file_manager
-    ):
-        """监听转发遇到内容保护频道（受限转发）时应降级为下载后上传。
-
-        降级下载的临时文件默认在转发完成后删除（delete_after_forward 默认 True）
-        """
-        from module.core.download.file_manager import UploadResult
-
-        mock_client.copy_message = AsyncMock(
-            side_effect=ChatForwardsRestricted_400(
-                value={
-                    "rpc_error_code": 400,
-                    "description": "Can't forward messages from a protected chat",
-                }
-            )
-        )
-        mock_downloader.download_range = AsyncMock(
-            return_value=(["/downloads/protected.mp4"], {})
-        )
-        mock_file_manager.upload = AsyncMock(
-            return_value=UploadResult(
-                success=True,
-                message=MagicMock(id=888),
-                error_msg=None,
-            )
-        )
-
-        executor = TaskExecutor(
-            task_manager=task_manager,
-            file_manager=mock_file_manager,
-            client=mock_client,
-            downloader=mock_downloader,
-        )
-        task = await task_manager.create_task(
-            task_type=TaskType.LISTEN_FORWARD,
-            chat_id=-1001234567890,
-            params={
-                "source_identifier": "@testchannel",
-                "target_identifier": "@targetchannel",
-                "target_chat_id": -1002000000000,
-                "delete_after_forward": True,
-            },
-        )
-
-        mock_message = MagicMock()
-        mock_message.id = 12345
-        mock_message.media = MagicMock()
-        mock_message.media.video = MagicMock()
-        mock_message.media.video.file_unique_id = "uniq123"
-
-        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
-
-        # 验证降级下载被触发
-        mock_downloader.download_range.assert_called_once()
-        # 上传到目标频道，且默认删除临时文件
-        upload_call = mock_file_manager.upload.call_args
-        assert upload_call[1]["chat_id"] == -1002000000000
-        assert upload_call[1]["delete_after"] is True
-        # 子任务标记为成功并记录上传消息 ID
-        updated = await task_manager.get_task(task.task_id)
-        item = updated.items[0]
-        assert item.status == ItemStatus.SUCCESS
-        assert item.uploaded_message_id == 888
-
 
 # ============================================================
 # 测试：Phase 3 - recover_listeners()
@@ -3776,8 +3710,6 @@ class TestForwardRestrictedFallback:
         # 上传到目标频道
         upload_call = mock_file_manager.upload.call_args
         assert upload_call[1]["chat_id"] == -1009998887777
-        # 受限降级转发的临时文件默认删除（delete_after_forward 默认 True）
-        assert upload_call[1]["delete_after"] is True
         # 子任务标记为成功并记录上传消息 ID
         updated = await task_manager.get_task(task.task_id)
         assert updated.status == TaskStatus.COMPLETED
@@ -3819,3 +3751,127 @@ class TestForwardRestrictedFallback:
         updated = await task_manager.get_task(task.task_id)
         assert updated.status == TaskStatus.FAILED
         assert updated.items[0].status == ItemStatus.FAILED
+
+
+# ============================================================
+# 测试：_execute_cleanup（定时清理任务执行）
+# ============================================================
+
+
+class TestExecuteCleanup:
+    """测试 cleanup_files 任务执行一轮清理。"""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_deletes_expired_skips_referenced_keeps_fresh(
+        self, task_manager, tmp_path
+    ):
+        """过期文件删除、被引用文件跳过、新文件保留，任务保持运行态并写 last_run。"""
+        from datetime import UTC, datetime
+        from unittest.mock import AsyncMock, MagicMock
+
+        from module.core.download.file_manager import FileManager
+
+        # 真实 FileManager + 指向临时目录的 config
+        fm = FileManager(config={}, client=AsyncMock())
+        mock_cm = MagicMock()
+        mock_cm.save_directory = str(tmp_path)
+        task_manager.config_manager = mock_cm
+        executor = TaskExecutor(
+            task_manager=task_manager, file_manager=fm, client=AsyncMock()
+        )
+
+        # 文件准备：过期 old/ref，未过期 new
+        old_path = tmp_path / "old.mp4"
+        old_path.write_bytes(b"o")
+        ref_path = tmp_path / "ref.mp4"
+        ref_path.write_bytes(b"r")
+        (tmp_path / "new.mp4").write_bytes(b"n")
+        old_ts = datetime.now(UTC).timestamp() - 10 * 86400
+        os.utime(old_path, (old_ts, old_ts))
+        os.utime(ref_path, (old_ts, old_ts))
+
+        # 引用保护：ref 被一个 running 的 upload 任务引用
+        from module.core.db import get_session
+        from module.core.task import models
+
+        now = datetime.now(UTC)
+        async with get_session() as session:
+            session.add(
+                models.TaskRecord(
+                    id="clean_ref",
+                    task_type="upload",
+                    status="running",
+                    chat_id=-2001,
+                    params={"file_paths": [str(ref_path)]},
+                    created_at=now,
+                )
+            )
+            await session.commit()
+
+        task = await task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={
+                "keep_days": 7,
+                "schedule": {"mode": "daily", "time": "03:00"},
+                "last_run": {
+                    "scanned": 0,
+                    "deleted": 0,
+                    "freed_bytes": 0,
+                    "started_at": None,
+                    "finished_at": None,
+                    "next_run_at": None,
+                },
+            },
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+
+        # 文件结果
+        assert not old_path.exists()
+        assert ref_path.exists()  # 被引用 → 跳过
+        assert (tmp_path / "new.mp4").exists()
+
+        # 任务保持运行态（周期任务活性态），last_run 已更新
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.status == TaskStatus.RUNNING
+        last_run = updated.params["last_run"]
+        # 引用保护在扫描层生效：ref 不计入过期候选
+        assert last_run["scanned"] == 1
+        assert last_run["deleted"] == 1
+        assert last_run["skipped"] == 0
+        assert last_run["freed_bytes"] == 1
+        assert last_run["started_at"] is not None
+        assert last_run["finished_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_empty_dirs(self, task_manager, tmp_path):
+        """过期文件删除后产生的空目录应被移除。"""
+        from datetime import UTC, datetime
+        from unittest.mock import AsyncMock, MagicMock
+
+        from module.core.download.file_manager import FileManager
+
+        fm = FileManager(config={}, client=AsyncMock())
+        mock_cm = MagicMock()
+        mock_cm.save_directory = str(tmp_path)
+        task_manager.config_manager = mock_cm
+        executor = TaskExecutor(
+            task_manager=task_manager, file_manager=fm, client=AsyncMock()
+        )
+
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        stale = sub / "stale.mp4"
+        stale.write_bytes(b"s")
+        old_ts = datetime.now(UTC).timestamp() - 20 * 86400
+        os.utime(stale, (old_ts, old_ts))
+
+        task = await task_manager.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={"keep_days": 7, "schedule": {"mode": "interval", "interval_hours": 24}},
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+
+        assert not stale.exists()
+        assert not sub.exists()  # 空目录已被清理

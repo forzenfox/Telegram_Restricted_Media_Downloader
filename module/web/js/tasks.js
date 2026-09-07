@@ -46,10 +46,9 @@ class TaskManager {
    */
   _resetCreateForm() {
     return {
-      taskType: "download", // download, forward, upload, listen_download, listen_forward
+      taskType: "download", // download, forward, listen_download, listen_forward, cleanup_files
       sourceChat: "",
       targetChat: "",
-      selectedFiles: [],
       messageRangeMode: "id_range", // date_range, id_range, multiple_ids, all, recent
       startDate: "",
       endDate: "",
@@ -62,8 +61,13 @@ class TaskManager {
       maxSize: "",
       minSizeUnit: "MB",
       maxSizeUnit: "MB",
-      deleteAfterUpload: true, // 默认上传后删除本地文件（符合设计文档 4.2.1.3）
-      deleteAfterForward: true, // 默认转发后删除临时文件（受限转发降级下载的文件）
+      // 定时清理（cleanup_files）专用字段
+      keepDaysPreset: "7", // 1日/3日/7日/30日/自定义
+      keepDays: 7, // 自定义保留天数 1~365
+      scheduleMode: "daily", // daily | interval
+      scheduleTime: "03:00", // daily 模式时刻
+      scheduleIntervalHours: 24, // interval 模式间隔（小时 1~72）
+      removeEmptyDirs: true, // 是否清理空目录
     };
   }
 
@@ -260,19 +264,12 @@ class TaskManager {
         params.source_identifier = this.createForm.sourceChat;
       }
       params.forward_target = this.createForm.targetChat;
-      // 受限转发降级下载的临时文件，转发后是否删除
-      params.delete_after_forward = this.createForm.deleteAfterForward;
       _flattenRange(this._buildMessageRange());
       // 类型过滤
       if (this.createForm.typeFilters.length > 0) {
         params.filter_types = this.createForm.typeFilters;
       }
       _addSizeFilter();
-    } else if (this.createForm.taskType === "upload") {
-      // 使用 targetChat（handleCreateTask 已确保是解析后的数字 ID）
-      params.chat_id = this.createForm.targetChat;
-      params.file_paths = this.createForm.selectedFiles || [];
-      params.delete_after_upload = this.createForm.deleteAfterUpload;
     } else if (this.createForm.taskType === "listen_download") {
       if (typeof this.createForm.sourceChat === "number") {
         params.chat_id = this.createForm.sourceChat;
@@ -289,17 +286,32 @@ class TaskManager {
         params.source_identifier = this.createForm.sourceChat;
       }
       params.target_identifier = this.createForm.targetChat;
-      // 受限转发降级下载的临时文件，转发后是否删除
-      params.delete_after_forward = this.createForm.deleteAfterForward;
       if (this.createForm.typeFilters.length > 0) {
         params.media_types = this.createForm.typeFilters;
       }
+    } else if (this.createForm.taskType === "cleanup_files") {
+      params.keep_days = this._resolveKeepDays();
+      params.schedule = this.createForm.scheduleMode === "daily"
+        ? { mode: "daily", time: this.createForm.scheduleTime }
+        : { mode: "interval", interval_hours: parseInt(this.createForm.scheduleIntervalHours) };
+      params.remove_empty_dirs = this.createForm.removeEmptyDirs;
     }
 
     return {
       task_type: this.createForm.taskType,
       params,
     };
+  }
+
+  /**
+   * 解析最终保留天数：preset 为自定义时取 keepDays，否则取预设值
+   * @returns {number} 保留天数 1~365
+   */
+  _resolveKeepDays() {
+    if (this.createForm.keepDaysPreset === "custom") {
+      return parseInt(this.createForm.keepDays);
+    }
+    return parseInt(this.createForm.keepDaysPreset);
   }
 
   // ==================== P0-2: 资源预检方法 ====================
@@ -574,6 +586,92 @@ class TaskManager {
   }
 
   /**
+   * 立即执行定时清理任务
+   * @param {string} taskId - 任务 ID
+   */
+  async runTask(taskId) {
+    try {
+      await api.runTask(taskId);
+      this._notify("success", "已触发立即清理");
+      await this.loadTasks();
+    } catch (error) {
+      this._notify("error", `立即清理失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 暂停定时清理任务调度
+   * @param {string} taskId - 任务 ID
+   */
+  async pauseTask(taskId) {
+    try {
+      await api.pauseTask(taskId);
+      this._notify("success", "已暂停定时清理");
+      await this.loadTasks();
+    } catch (error) {
+      this._notify("error", `暂停失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 恢复定时清理任务调度
+   * @param {string} taskId - 任务 ID
+   */
+  async resumeTask(taskId) {
+    try {
+      await api.resumeTask(taskId);
+      this._notify("success", "已恢复定时清理");
+      await this.loadTasks();
+    } catch (error) {
+      this._notify("error", `恢复失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 格式化定时清理调度文本
+   * @param {object} schedule - 调度参数 { mode, time, interval_hours }
+   * @returns {string} 例如 "每天 03:00" / "每隔 24 小时"
+   */
+  formatScheduleText(schedule) {
+    if (!schedule) return "-";
+    if (schedule.mode === "daily") {
+      return `每天 ${schedule.time || "-"}`;
+    }
+    if (schedule.mode === "interval") {
+      return `每隔 ${schedule.interval_hours ?? "-"} 小时`;
+    }
+    return "-";
+  }
+
+  /**
+   * 格式化耗时（秒 → 可读文本，如 "1分30秒"）
+   * @param {number} seconds - 秒数
+   */
+  formatDuration(seconds) {
+    if (!seconds && seconds !== 0) return "-";
+    if (seconds < 60) return `${seconds} 秒`;
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    if (m < 60) return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分钟`;
+    const h = Math.floor(m / 60);
+    const restM = m % 60;
+    return h > 0 && restM > 0 ? `${h} 小时 ${restM} 分钟` : `${h} 小时`;
+  }
+
+  /**
+   * 根据最近一次清理的起止时间计算耗时
+   * @param {object} lastRun - last_run 对象（含 started_at / finished_at）
+   * @returns {string} 可读耗时文本，无法计算时返回 "-"
+   */
+  formatLastRunDuration(lastRun) {
+    if (!lastRun || !lastRun.started_at || !lastRun.finished_at) return "-";
+    const start = new Date(lastRun.started_at).getTime();
+    const end = new Date(lastRun.finished_at).getTime();
+    if (isNaN(start) || isNaN(end) || end < start) return "-";
+    return this.formatDuration((end - start) / 1000);
+  }
+
+  /**
    * 关闭详情抽屉
    */
   closeDetailDrawer() {
@@ -678,15 +776,34 @@ class TaskManager {
     // 验证目标频道
     if (
       (form.taskType === "forward" ||
-        form.taskType === "upload" ||
         form.taskType === "listen_forward") &&
       !form.targetChat
     ) {
       errors.push("请输入目标频道");
     }
 
+    // 验证定时清理参数
+    if (form.taskType === "cleanup_files") {
+      const keepDays = this._resolveKeepDays();
+      if (!Number.isInteger(keepDays) || keepDays < 1 || keepDays > 365) {
+        errors.push("保留天数需为 1~365 的整数");
+      }
+      if (form.scheduleMode === "daily") {
+        if (!/^(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/.test(form.scheduleTime || "")) {
+          errors.push("时刻格式不正确（如 03:00）");
+        }
+      } else if (form.scheduleMode === "interval") {
+        const hours = parseInt(form.scheduleIntervalHours);
+        if (!Number.isInteger(hours) || hours < 1 || hours > 72) {
+          errors.push("间隔小时数需为 1~72 的整数");
+        }
+      } else {
+        errors.push("请选择调度模式");
+      }
+    }
+
     // 验证消息范围（监听任务无需消息范围，与 HTML 显示逻辑一致）
-    if (form.taskType !== "upload" && !form.taskType.startsWith("listen_")) {
+    if (!form.taskType.startsWith("listen_") && form.taskType !== "cleanup_files") {
       if (form.messageRangeMode === "date_range") {
         if (!form.startDate || !form.endDate) {
           errors.push("请选择日期范围");
@@ -716,14 +833,6 @@ class TaskManager {
           errors.push("消息数量不能超过 1000 条");
         }
       }
-    }
-
-    // 验证上传文件
-    if (
-      form.taskType === "upload" &&
-      (!form.selectedFiles || form.selectedFiles.length === 0)
-    ) {
-      errors.push("请选择至少一个文件");
     }
 
     return errors;
@@ -898,6 +1007,7 @@ class TaskManager {
       upload: "上传",
       listen_download: "🕵️ 监听下载",
       listen_forward: "📲 监听转发",
+      cleanup_files: "🧹 定时清理",
     };
     return textMap[type] || type;
   }

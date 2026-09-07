@@ -299,6 +299,9 @@ class AppContext:
         # 否则 _dispatch 无法提交执行）
         await self.task_manager.resume_queued_tasks()
 
+        # 启动定时清理任务调度器（周期触发 cleanup_files 任务）
+        await self.task_executor.cleanup_scheduler.start()
+
     def get_webui_url(self, token: str) -> str:
         """生成 WebUI 访问链接。"""
         return f"http://{self.web_host}:{self.web_port}?token={token}"

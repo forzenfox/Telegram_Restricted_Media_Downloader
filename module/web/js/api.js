@@ -237,6 +237,30 @@ class ApiClient {
     return this.request('GET', `/api/tasks/${taskId}`);
   }
 
+  /**
+   * 立即执行任务（仅 cleanup_files 支持）
+   * @param {string} taskId - 任务 ID
+   */
+  async runTask(taskId) {
+    return this.request('POST', `/api/tasks/${taskId}/run`);
+  }
+
+  /**
+   * 暂停任务调度（仅 cleanup_files 支持）
+   * @param {string} taskId - 任务 ID
+   */
+  async pauseTask(taskId) {
+    return this.request('POST', `/api/tasks/${taskId}/pause`);
+  }
+
+  /**
+   * 恢复任务调度（仅 cleanup_files 支持）
+   * @param {string} taskId - 任务 ID
+   */
+  async resumeTask(taskId) {
+    return this.request('POST', `/api/tasks/${taskId}/resume`);
+  }
+
   // ==================== 文件相关 API ====================
 
   /**
@@ -254,6 +278,14 @@ class ApiClient {
    */
   async getFileInfo(filePath) {
     return this.request('GET', `/api/files/info?path=${encodeURIComponent(filePath)}`);
+  }
+
+  /**
+   * 批量删除本地文件
+   * @param {string[]} filePaths - 待删除的文件路径列表
+   */
+  async deleteFiles(filePaths) {
+    return this.request('DELETE', '/api/files/batch', { file_paths: filePaths });
   }
 
   // ==================== 频道相关 API ====================

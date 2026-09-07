@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Literal, Optional, Union
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
-TaskType = Literal["download", "forward", "upload", "listen_download", "listen_forward"]
+TaskType = Literal["download", "forward", "upload", "listen_download", "listen_forward", "cleanup_files"]
 TaskStatus = Literal["pending", "queued", "running", "completed", "failed", "cancelled"]
 RangeMode = Literal["date_range", "id_range", "multiple_ids", "all", "recent"]
 
@@ -16,8 +16,8 @@ class TaskParams(BaseModel):
     对 TaskCreate.params 做可选约束，同时允许额外字段以保持向后兼容。
     """
 
-    source_identifier: Optional[Union[int, str]] = None
-    target_identifier: Optional[Union[int, str]] = None
+    source_identifier: Optional[str] = None
+    target_identifier: Optional[str] = None
     chat_id: Optional[Union[int, str]] = None
     range_mode: Optional[RangeMode] = None
     recent_count: Optional[int] = None
@@ -25,7 +25,6 @@ class TaskParams(BaseModel):
     min_size: Optional[int] = None
     max_size: Optional[int] = None
     enable_repository_backup: Optional[bool] = None
-    delete_after_forward: Optional[bool] = None
 
     model_config = ConfigDict(extra="allow")
 

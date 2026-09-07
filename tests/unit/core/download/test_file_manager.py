@@ -1,6 +1,7 @@
 # coding=UTF-8
 # FileManager 模块单元测试。
 import os
+import time
 import pytest
 from unittest.mock import AsyncMock
 
@@ -637,3 +638,201 @@ class TestClassifyFiles:
         album, single = await file_manager._classify_files(files)
         assert len(album) == 2  # photo + video
         assert len(single) == 2  # document + sticker
+
+
+# ============================================================
+# scan_expired_files 测试（FM-CLEAN 系列）
+# ============================================================
+
+
+class TestScanExpiredFiles:
+    """FM-CLEAN 系列：过期文件扫描测试。"""
+
+    @staticmethod
+    def _set_mtime(path, age_seconds):
+        """将文件最后修改时间设置为 now - age_seconds。"""
+        ts = time.time() - age_seconds
+        os.utime(path, (ts, ts))
+
+    @pytest.mark.asyncio
+    async def test_returns_only_expired_files(self, file_manager, tmp_path):
+        """只有超过保留天数的文件会被返回。"""
+        old = tmp_path / "old.jpg"
+        old.write_bytes(b"old")
+        (tmp_path / "new.jpg").write_bytes(b"new")
+        self._set_mtime(str(old), 10 * 86400)  # 10 天前
+
+        result = await file_manager.scan_expired_files(str(tmp_path), keep_days=7)
+        assert [f.name for f in result] == ["old.jpg"]
+
+    @pytest.mark.asyncio
+    async def test_keeps_file_within_keep_days(self, file_manager, tmp_path):
+        """mtime 接近但未超过保留天数的文件应保留（严格大于才过期）。"""
+        f = tmp_path / "near.jpg"
+        f.write_bytes(b"near")
+        self._set_mtime(str(f), 7 * 86400 - 3600)  # 7 天减去 1 小时
+
+        result = await file_manager.scan_expired_files(str(tmp_path), keep_days=7)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_hidden_files(self, file_manager, tmp_path):
+        """隐藏文件不应被清理。"""
+        hidden = tmp_path / ".hidden.jpg"
+        hidden.write_bytes(b"h")
+        self._set_mtime(str(hidden), 30 * 86400)
+
+        result = await file_manager.scan_expired_files(str(tmp_path), keep_days=7)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_temp_files(self, file_manager, tmp_path):
+        """写入中的 .temp 文件不应被清理，同名的正式文件正常清理。"""
+        (tmp_path / "movie.mp4.temp").write_bytes(b"t")
+        done = tmp_path / "movie.mp4"
+        done.write_bytes(b"d")
+        self._set_mtime(str(done), 10 * 86400)
+
+        result = await file_manager.scan_expired_files(str(tmp_path), keep_days=7)
+        assert [f.name for f in result] == ["movie.mp4"]
+
+    @pytest.mark.asyncio
+    async def test_filters_referenced_paths(self, file_manager, tmp_path):
+        """被活跃任务引用的文件应被跳过。"""
+        ref = tmp_path / "referenced.mp4"
+        ref.write_bytes(b"r")
+        self._set_mtime(str(ref), 10 * 86400)
+        free = tmp_path / "free.mp4"
+        free.write_bytes(b"f")
+        self._set_mtime(str(free), 10 * 86400)
+
+        result = await file_manager.scan_expired_files(
+            str(tmp_path),
+            keep_days=7,
+            referenced_paths={str(ref)},
+        )
+        assert [f.name for f in result] == ["free.mp4"]
+
+    @pytest.mark.asyncio
+    async def test_recursive_subdirs(self, file_manager, tmp_path):
+        """递归扫描子目录中的过期文件。"""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        old = sub / "old.mp4"
+        old.write_bytes(b"o")
+        self._set_mtime(str(old), 20 * 86400)
+
+        result = await file_manager.scan_expired_files(str(tmp_path), keep_days=7)
+        assert [f.name for f in result] == ["old.mp4"]
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_root_returns_empty(self, file_manager, tmp_path):
+        """根目录不存在时返回空列表。"""
+        result = await file_manager.scan_expired_files(
+            str(tmp_path / "missing"), keep_days=7
+        )
+        assert result == []
+
+
+# ============================================================
+# precheck_delete_paths / delete_many 测试（FM-DEL 系列）
+# ============================================================
+
+
+class TestBatchDelete:
+    """FM-DEL 系列：批量删除与路径预检测试。"""
+
+    @pytest.mark.asyncio
+    async def test_precheck_accepts_normal_file(self, file_manager, tmp_path):
+        """save_root 内的普通文件允许删除。"""
+        f = tmp_path / "a.jpg"
+        f.write_bytes(b"a")
+        result = await file_manager.precheck_delete_paths(
+            [str(f)], save_root=str(tmp_path)
+        )
+        assert len(result) == 1
+        assert result[0].ok is True
+        assert result[0].reason is None
+
+    @pytest.mark.asyncio
+    async def test_precheck_rejects_out_of_bounds(self, file_manager, tmp_path):
+        """save_root 之外的文件拒绝删除。"""
+        outside = tmp_path.parent / "outside.jpg"
+        outside.write_bytes(b"o")
+        result = await file_manager.precheck_delete_paths(
+            [str(outside)], save_root=str(tmp_path)
+        )
+        assert result[0].ok is False
+        assert result[0].reason == "OUT_OF_BOUNDS"
+
+    @pytest.mark.asyncio
+    async def test_precheck_rejects_directory(self, file_manager, tmp_path):
+        """目录拒绝删除（手动删除仅支持文件）。"""
+        d = tmp_path / "subdir"
+        d.mkdir()
+        result = await file_manager.precheck_delete_paths(
+            [str(d)], save_root=str(tmp_path)
+        )
+        assert result[0].ok is False
+        assert result[0].reason == "IS_DIRECTORY"
+
+    @pytest.mark.asyncio
+    async def test_precheck_accepts_missing_path_inside_root(self, file_manager, tmp_path):
+        """save_root 内不存在的路径视为已删除（幂等）。"""
+        result = await file_manager.precheck_delete_paths(
+            [str(tmp_path / "ghost.jpg")], save_root=str(tmp_path)
+        )
+        assert result[0].ok is True
+
+    @pytest.mark.asyncio
+    async def test_delete_many_all_success(self, file_manager, tmp_path):
+        """批量删除全部成功，文件从磁盘消失。"""
+        paths = []
+        for name in ("a.mp4", "b.jpg"):
+            f = tmp_path / name
+            f.write_bytes(b"x")
+            paths.append(str(f))
+
+        stats = await file_manager.delete_many(
+            paths, save_root=str(tmp_path)
+        )
+        assert stats["total"] == 2
+        assert stats["deleted"] == 2
+        assert stats["failed"] == 0
+        assert stats["skipped"] == 0
+        assert not (tmp_path / "a.mp4").exists()
+        assert not (tmp_path / "b.jpg").exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_many_skips_referenced(self, file_manager, tmp_path):
+        """被任务引用的文件跳过，其余正常删除。"""
+        free = tmp_path / "free.mp4"
+        free.write_bytes(b"f")
+        ref = tmp_path / "ref.mp4"
+        ref.write_bytes(b"r")
+
+        stats = await file_manager.delete_many(
+            [str(free), str(ref)],
+            save_root=str(tmp_path),
+            referenced_paths={str(ref)},
+        )
+        assert stats["total"] == 2
+        assert stats["deleted"] == 1
+        assert stats["skipped"] == 1
+        assert stats["failed"] == 0
+        assert not free.exists()
+        assert ref.exists()
+
+        skipped = [r for r in stats["results"] if r["skipped"]]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "task_referenced"
+
+    @pytest.mark.asyncio
+    async def test_delete_many_idempotent_for_missing(self, file_manager, tmp_path):
+        """不存在的路径幂等删除，计入 deleted。"""
+        stats = await file_manager.delete_many(
+            [str(tmp_path / "ghost.mp4")], save_root=str(tmp_path)
+        )
+        assert stats["total"] == 1
+        assert stats["deleted"] == 1
+        assert stats["failed"] == 0

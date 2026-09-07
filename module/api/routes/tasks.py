@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 from typing import cast
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -164,11 +165,69 @@ async def create_task(
         "upload": TaskType.UPLOAD,
         "listen_download": TaskType.LISTEN_DOWNLOAD,
         "listen_forward": TaskType.LISTEN_FORWARD,
+        "cleanup_files": TaskType.CLEANUP_FILES,
     }
     task_type = type_map.get(body.task_type)
     if task_type is None:
         return error_json_response(
             code=400, message=f"无效的任务类型: {body.task_type}", status_code=400
+        )
+
+    # 定时清理任务：独立参数校验与规整（无源/目标频道、无消息范围）
+    if task_type == TaskType.CLEANUP_FILES:
+        errors = []
+        keep_days = params.get("keep_days")
+        if not isinstance(keep_days, int) or isinstance(keep_days, bool) or not (
+            1 <= keep_days <= 365
+        ):
+            errors.append("keep_days 需为 1~365 的整数")
+
+        schedule = params.get("schedule") or {}
+        mode = schedule.get("mode")
+        if mode not in ("daily", "interval"):
+            errors.append("schedule.mode 需为 daily 或 interval")
+        elif mode == "daily":
+            time_value = schedule.get("time")
+            if not isinstance(time_value, str) or not re.fullmatch(
+                r"([01]?\d|2[0-3]):[0-5]\d", time_value
+            ):
+                errors.append("schedule.time 需为合法 HH:MM（24 小时制）")
+        elif mode == "interval":
+            hours = schedule.get("interval_hours")
+            if not isinstance(hours, int) or isinstance(hours, bool) or not (
+                1 <= hours <= 72
+            ):
+                errors.append("schedule.interval_hours 需为 1~72 的整数")
+
+        if errors:
+            return error_json_response(
+                code=400, message="；".join(errors), status_code=400
+            )
+
+        task_params: dict = {
+            "keep_days": keep_days,
+            "schedule": schedule,
+            "scan_root": None,
+            "remove_empty_dirs": params.get("remove_empty_dirs", True),
+            "last_run": {
+                "scanned": 0,
+                "deleted": 0,
+                "freed_bytes": 0,
+                "started_at": None,
+                "finished_at": None,
+                "next_run_at": None,
+            },
+        }
+        try:
+            task = await task_manager.create_task(
+                task_type=task_type,
+                params=task_params,
+            )
+        except CoreTaskConflictError as e:
+            raise TaskConflictError("LISTEN_ALREADY_EXISTS") from e
+
+        return json_response(
+            data=_task_to_out(task).model_dump(mode="json"), status_code=201
         )
 
     # 源端标识：优先 source_identifier，由 TaskManager 内部解析；否则回退到 chat_id
@@ -233,10 +292,6 @@ async def create_task(
         "max_size": params.get("max_size"),
         "enable_repository_backup": params.get("enable_repository_backup"),
     }
-    # 转发/监听转发任务：受限转发降级下载后上传产生的临时文件，完成后是否删除
-    # （默认删除，及时清理云服务器磁盘空间）
-    if task_type in (TaskType.FORWARD, TaskType.LISTEN_FORWARD):
-        task_params["delete_after_forward"] = params.get("delete_after_forward", True)
     # source_identifier 存在时交给 TaskManager 解析，不要设置 chat_id；否则使用 chat_id 回退
     if source_identifier:
         task_params["source_identifier"] = source_identifier
@@ -343,6 +398,97 @@ async def retry_task(
         raise TaskNotFoundError(task_id)
     except TaskStateError:
         raise TaskConflictError("任务状态不允许重试")
+
+
+def _get_cleanup_scheduler(request: Request):
+    """获取 CleanupScheduler 实例（未就绪返回 None）。"""
+    executor = getattr(request.app.state, "task_executor", None)
+    if executor is None:
+        return None
+    return getattr(executor, "cleanup_scheduler", None)
+
+
+async def _require_cleanup_task(request: Request, task_id: str, task_manager):
+    """校验任务为 cleanup_files 类型。
+
+    Returns:
+        (task, scheduler, error, error_status)：scheduler 与 error 互斥，
+        非清理任务 → (task, None, 400)；执行器未就绪 → (task, None, 503)。
+    """
+    task = await task_manager.get_task(task_id)
+    if task is None:
+        raise TaskNotFoundError(task_id)
+    if task.task_type != TaskType.CLEANUP_FILES:
+        return task, None, "仅定时清理任务支持该操作", 400
+    scheduler = _get_cleanup_scheduler(request)
+    if scheduler is None:
+        return task, None, "任务执行器未就绪", 503
+    return task, scheduler, None, None
+
+
+@router.post("/{task_id}/run")
+async def run_task_immediately(
+    task_id: str,
+    request: Request,
+    token: str = Depends(require_token),
+    task_manager: TaskManager = Depends(get_task_manager),
+):
+    """立即执行一轮定时清理（不改变既定周期）。"""
+    task, scheduler, err, err_status = await _require_cleanup_task(
+        request, task_id, task_manager
+    )
+    if err:
+        return error_json_response(
+            code=err_status, message=err, status_code=err_status
+        )
+    await scheduler.run_now(task_id)
+    return json_response(
+        data=_task_to_out(task).model_dump(mode="json"), message="已触发立即执行"
+    )
+
+
+@router.post("/{task_id}/pause")
+async def pause_task(
+    task_id: str,
+    request: Request,
+    token: str = Depends(require_token),
+    task_manager: TaskManager = Depends(get_task_manager),
+):
+    """暂停定时清理任务的周期调度。"""
+    task, scheduler, err, err_status = await _require_cleanup_task(
+        request, task_id, task_manager
+    )
+    if err:
+        return error_json_response(
+            code=err_status, message=err, status_code=err_status
+        )
+    await scheduler.pause(task_id)
+    task = await task_manager.get_task(task_id)
+    return json_response(
+        data=_task_to_out(task).model_dump(mode="json"), message="任务已暂停"
+    )
+
+
+@router.post("/{task_id}/resume")
+async def resume_task(
+    task_id: str,
+    request: Request,
+    token: str = Depends(require_token),
+    task_manager: TaskManager = Depends(get_task_manager),
+):
+    """恢复定时清理任务的周期调度。"""
+    task, scheduler, err, err_status = await _require_cleanup_task(
+        request, task_id, task_manager
+    )
+    if err:
+        return error_json_response(
+            code=err_status, message=err, status_code=err_status
+        )
+    await scheduler.resume(task_id)
+    task = await task_manager.get_task(task_id)
+    return json_response(
+        data=_task_to_out(task).model_dump(mode="json"), message="任务已恢复"
+    )
 
 
 @router.delete("/{task_id}")
