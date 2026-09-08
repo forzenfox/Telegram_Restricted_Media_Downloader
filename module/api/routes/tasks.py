@@ -235,9 +235,26 @@ async def create_task(
     chat_id = None
     if not source_identifier:
         raw_chat_id = params.get("chat_id")
-        try:
-            chat_id = int(raw_chat_id) if raw_chat_id is not None else None
-        except (ValueError, TypeError):
+        if raw_chat_id is None:
+            pass
+        elif isinstance(raw_chat_id, int) and not isinstance(raw_chat_id, bool):
+            chat_id = raw_chat_id
+        elif isinstance(raw_chat_id, str):
+            text = raw_chat_id.strip()
+            if not text:
+                pass
+            elif re.fullmatch(r"-?\d+", text):
+                # 纯数字（含负数）直接转 int
+                chat_id = int(text)
+            else:
+                # 非数字字符串（t.me 链接 / @username / 裸 username / + 私有邀请）→
+                # 兜底走 source_identifier 通道，由 TaskManager._resolve_chat_id
+                # 通过 IdentifierService 解析。注意：对 upload 任务而言，
+                # 此处 source_identifier 实际承载"目标频道"语义（upload 任务
+                # 的 chat_id 由执行器用作目标频道，无源对话），但字段名沿用
+                # 历史约定以复用统一的标识符解析路径。
+                source_identifier = text
+        else:
             return error_json_response(
                 code=400, message="chat_id 格式无效", status_code=400
             )

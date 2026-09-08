@@ -361,6 +361,86 @@ class TestTaskEndpoints:
         assert data["data"]["task_type"] == "upload"
 
     @pytest.mark.asyncio
+    async def test_create_upload_task_with_t_me_link(self, client):
+        """测试创建上传任务，目标频道为 t.me 私有邀请链接（+xxx）。
+
+        契约：文件管理页面"上传选中文件"输入 t.me 链接（数字/@username/裸
+        username/t.me 链接/+ 私有邀请）作为目标频道时，API 应通过
+        IdentifierService 解析后成功创建任务，而不是 400。
+        """
+        ac, app, token = client
+        # 模拟 IdentifierService.resolve("https://t.me/+RahwU0t5xv9lYjNl")
+        # 解析为标准 chat_id（私有频道，chat_id 为负数）
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-2001234567890,
+                chat_type="channel",
+                chat_name="Private Channel",
+                username=None,
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+        # 源端解析已下沉到 TaskManager，需同步覆盖其内部服务
+        app.state.task_manager._identifier_service = mock_service
+
+        body = {
+            "task_type": "upload",
+            "params": {
+                "file_paths": ["/tmp/a.mp4", "/tmp/b.mp4"],
+                "chat_id": "https://t.me/+RahwU0t5xv9lYjNl",
+                "send_as_media_group": True,
+                "delete_after_upload": True,
+            },
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["code"] == 0
+        assert data["data"]["task_type"] == "upload"
+
+    @pytest.mark.asyncio
+    async def test_create_upload_task_with_source_identifier(self, client):
+        """测试创建上传任务，使用 source_identifier 传目标频道。
+
+        契约：前端用 source_identifier 风格传值（与 download/forward 一致）
+        时，API 应通过 IdentifierService 解析后成功创建任务。
+        """
+        ac, app, token = client
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-1009876543210,
+                chat_type="channel",
+                chat_name="Target Channel",
+                username="target_channel",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+        app.state.task_manager._identifier_service = mock_service
+
+        body = {
+            "task_type": "upload",
+            "params": {
+                "file_paths": ["/tmp/a.mp4"],
+                "source_identifier": "@target_channel",
+            },
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["code"] == 0
+        assert data["data"]["task_type"] == "upload"
+
+    @pytest.mark.asyncio
     async def test_create_task_with_source_identifier(self, client):
         """测试使用 source_identifier 创建任务。"""
         ac, app, token = client
