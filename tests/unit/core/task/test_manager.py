@@ -1817,6 +1817,57 @@ class TestRestartRecovery:
         await db.close_db()
 
     @pytest.mark.asyncio
+    async def test_init_keeps_cleanup_running_untouched(self, db_path):
+        """running 状态的定时清理任务不应被标记为 failed（交由 CleanupScheduler 续跑）。
+
+        契约：cleanup_files 为常驻 running 型任务，重启后保持 running、
+        error_message 为空、last_run.next_run_at 保留。
+        """
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=2)
+        task = await tm1.create_task(
+            task_type=TaskType.CLEANUP_FILES,
+            params={
+                "keep_days": 7,
+                "schedule": {"mode": "daily", "time": "03:00"},
+                "last_run": {
+                    "scanned": 10,
+                    "deleted": 3,
+                    "freed_bytes": 1024,
+                    "started_at": "2026-09-07T03:00:01+08:00",
+                    "finished_at": "2026-09-07T03:00:12+08:00",
+                    "next_run_at": "2026-09-08T03:00:00+08:00",
+                },
+            },
+        )
+        await tm1.start_task(task.task_id)
+        assert task.status == TaskStatus.RUNNING
+        await db.close_db()
+
+        # 第二轮：重启后 initialize() 不应把 cleanup_files 标记为 failed
+        await db.init_db(db_path)
+        tm2 = TaskManager(max_concurrent_tasks=2)
+        await tm2.initialize()
+        task2 = await tm2.get_task(task.task_id)
+        assert task2 is not None
+        assert task2.status == TaskStatus.RUNNING
+        assert (task2.error_message or "") == ""
+        assert task2.params["last_run"]["next_run_at"] == "2026-09-08T03:00:00+08:00"
+        await db.close_db()
+
+    def test_resident_running_constants_consistency(self):
+        """常驻 running 常量契约：CLEANUP_FILES 在集合内，LISTEN 为其子集。"""
+        from module.core.task.manager import (
+            LISTEN_TASK_TYPES,
+            RESIDENT_RUNNING_TASK_TYPES,
+        )
+
+        assert TaskType.CLEANUP_FILES in RESIDENT_RUNNING_TASK_TYPES
+        assert LISTEN_TASK_TYPES.issubset(RESIDENT_RUNNING_TASK_TYPES)
+
+    @pytest.mark.asyncio
     async def test_init_keeps_other_states_untouched(self, db_path):
         """pending/completed/failed/cancelled 状态在启动加载时不受影响。"""
         from module.core import db

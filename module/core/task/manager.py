@@ -51,6 +51,26 @@ class TaskType(Enum):
     CLEANUP_FILES = "cleanup_files"
 
 
+# 常驻 running 型任务：执行完成后不进入 completed，重启后保持 running，
+# 由各自组件恢复/续跑（监听任务走 recover_listeners，定时清理走 CleanupScheduler）。
+# 新增常驻型任务类型时必须同步加入此集合，并补充重启恢复测试。
+RESIDENT_RUNNING_TASK_TYPES: frozenset[TaskType] = frozenset(
+    {
+        TaskType.LISTEN_DOWNLOAD,
+        TaskType.LISTEN_FORWARD,
+        TaskType.CLEANUP_FILES,
+    }
+)
+
+# 其中的监听型任务：重启后由 TaskExecutor.recover_listeners 重新注册 Handler。
+LISTEN_TASK_TYPES: frozenset[TaskType] = frozenset(
+    {
+        TaskType.LISTEN_DOWNLOAD,
+        TaskType.LISTEN_FORWARD,
+    }
+)
+
+
 class TaskStatus(Enum):
     """任务状态。"""
 
@@ -339,14 +359,13 @@ class TaskManager:
                 log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
 
         # 处理崩溃遗留的 running 非监听任务：标记为 failed，释放并发槽位。
-        # 监听任务由 TaskExecutor.recover_listeners 恢复，不在此处理。
+        # 常驻 running 型任务（监听/定时清理）保持原状态，交由各自组件恢复续跑。
         # （注意：会话外保存，避免在只读查询会话内执行写操作）
         stale_running = [
             task
             for task in self._tasks.values()
             if task.status == TaskStatus.RUNNING
-            and task.task_type
-            not in (TaskType.LISTEN_DOWNLOAD, TaskType.LISTEN_FORWARD)
+            and task.task_type not in RESIDENT_RUNNING_TASK_TYPES
         ]
         for task in stale_running:
             task.status = TaskStatus.FAILED
@@ -551,7 +570,7 @@ class TaskManager:
 
     def _check_listen_conflict(self, chat_id: int, task_type: TaskType) -> None:
         """检查同一 chat_id + task_type 是否已存在进行中的监听任务。"""
-        if task_type not in (TaskType.LISTEN_DOWNLOAD, TaskType.LISTEN_FORWARD):
+        if task_type not in LISTEN_TASK_TYPES:
             return
         for task in self._tasks.values():
             if (
@@ -825,9 +844,7 @@ class TaskManager:
             records = (
                 (
                     await session.execute(
-                        select(TaskRecord).where(
-                            TaskRecord.status.in_(active_statuses)
-                        )
+                        select(TaskRecord).where(TaskRecord.status.in_(active_statuses))
                     )
                 )
                 .scalars()
@@ -842,18 +859,20 @@ class TaskManager:
                 # params.file_paths（排队中的上传任务目标文件等）。
                 for p in record.params.get("file_paths") or []:
                     if p:
-                        referenced.add(
-                            os.path.abspath(os.path.normpath(str(p)))
-                        )
+                        referenced.add(os.path.abspath(os.path.normpath(str(p))))
 
                 # 已落地的子任务文件路径（下载中/上传中）。
                 item_records = (
-                    await session.execute(
-                        select(TaskItemRecord).where(
-                            TaskItemRecord.task_id == record.id
+                    (
+                        await session.execute(
+                            select(TaskItemRecord).where(
+                                TaskItemRecord.task_id == record.id
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 for item in item_records:
                     if item.file_path:
                         norm = os.path.abspath(os.path.normpath(item.file_path))

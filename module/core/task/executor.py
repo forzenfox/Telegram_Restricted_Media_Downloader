@@ -24,6 +24,8 @@ from pyrogram.handlers import MessageHandler
 from module.core.config_manager import ConfigManager
 from module.core.download.file_manager import FileInfo, FileManager, UploadProgress
 from module.core.task.manager import (
+    LISTEN_TASK_TYPES,
+    RESIDENT_RUNNING_TASK_TYPES,
     ExecutorError,
     ItemStatus,
     Task,
@@ -223,9 +225,7 @@ class TaskExecutor:
         root = (task.params or {}).get("scan_root")
         if root:
             return os.path.abspath(os.path.normpath(root))
-        cm = self._config_manager or getattr(
-            self._task_manager, "config_manager", None
-        )
+        cm = self._config_manager or getattr(self._task_manager, "config_manager", None)
         save_dir = getattr(cm, "save_directory", None) or "downloads"
         return os.path.abspath(os.path.normpath(save_dir))
 
@@ -264,12 +264,8 @@ class TaskExecutor:
             else:
                 raise ExecutorError(f"未知任务类型: {task.task_type}")
 
-            # 监听任务/定时清理任务为长期运行任务，不进入 completed 状态
-            if task.task_type not in (
-                TaskType.LISTEN_DOWNLOAD,
-                TaskType.LISTEN_FORWARD,
-                TaskType.CLEANUP_FILES,
-            ):
+            # 常驻 running 型任务（监听/定时清理）为长期运行任务，不进入 completed 状态
+            if task.task_type not in RESIDENT_RUNNING_TASK_TYPES:
                 # 检查子任务执行结果：所有子任务都失败/跳过时标记为 FAILED
                 # 重新加载任务以获取最新的子任务状态
                 updated_task = await self._task_manager.get_task(task.task_id)
@@ -390,14 +386,12 @@ class TaskExecutor:
         重新注册 MessageHandler。恢复失败的任务标记为 failed。
         """
         # 查询所有 running 状态的监听任务
-        listen_download_tasks, _ = await self._task_manager.list_tasks(
-            task_type=TaskType.LISTEN_DOWNLOAD, status=TaskStatus.RUNNING
-        )
-        listen_forward_tasks, _ = await self._task_manager.list_tasks(
-            task_type=TaskType.LISTEN_FORWARD, status=TaskStatus.RUNNING
-        )
-
-        all_tasks = list(listen_download_tasks) + list(listen_forward_tasks)
+        all_tasks: list[Task] = []
+        for task_type in LISTEN_TASK_TYPES:
+            tasks, _ = await self._task_manager.list_tasks(
+                task_type=task_type, status=TaskStatus.RUNNING
+            )
+            all_tasks.extend(tasks)
 
         if not all_tasks:
             log.info("没有需要恢复的监听任务")
