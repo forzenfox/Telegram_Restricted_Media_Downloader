@@ -523,20 +523,28 @@
 
         async loadStats() {
           try {
-            const status = await api.getResourceStatus();
+            // 统计卡片数据来自 /api/monitor/stats，Client 连接状态来自 /resource/status
+            const [statsRes, status] = await Promise.all([
+              api.getMonitorStats(),
+              api.getResourceStatus(),
+            ]);
+            const system = statsRes.system || {};
+            const memory = system.memory || {};
+            const disk = system.disk || {};
+            const tasks = statsRes.tasks || {};
             this.stats = {
               ...this.stats,
-              diskTotal: status.disk_total || 0,
-              diskUsed: status.disk_used || 0,
-              diskFree: status.disk_free || 0,
-              diskPercent: status.disk_percent || 0,
-              memoryTotal: status.memory_total || 0,
-              memoryUsed: status.memory_used || 0,
-              memoryPercent: status.memory_percent || 0,
-              cpuPercent: status.cpu_percent || 0,
-              runningTasks: status.running_tasks || 0,
-              queuedTasks: status.queued_tasks || 0,
-              failedTasks: status.failed_tasks || 0,
+              diskTotal: disk.total || 0,
+              diskUsed: disk.used || 0,
+              diskFree: disk.free || 0,
+              diskPercent: disk.percent || 0,
+              memoryTotal: memory.total || 0,
+              memoryUsed: memory.used || 0,
+              memoryPercent: memory.percent || 0,
+              cpuPercent: system.cpu_percent || 0,
+              runningTasks: tasks.running || 0,
+              queuedTasks: tasks.queued || 0,
+              failedTasks: tasks.failed || 0,
               loaded: true,
             };
             // 提取 Client 连接状态

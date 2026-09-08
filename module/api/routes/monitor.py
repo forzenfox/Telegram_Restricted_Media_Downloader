@@ -5,10 +5,11 @@
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, Request
 
-from module.api.dependencies import require_token, get_monitor
-from module.api.responses import json_response, error_json_response
+from module.api.dependencies import get_monitor, require_token
+from module.api.responses import error_json_response, json_response
 
 router = APIRouter(prefix="/monitor", tags=["监控"])
 logger = logging.getLogger(__name__)
@@ -28,9 +29,12 @@ async def get_monitor_stats(
         return error_json_response("监控服务不可用")
 
     task_manager = getattr(request.app.state, "task_manager", None)
+    config_manager = getattr(request.app.state, "config_manager", None)
 
     try:
-        stats = monitor.get_monitor_stats(task_manager=task_manager)
+        stats = monitor.get_monitor_stats(
+            task_manager=task_manager, config_manager=config_manager
+        )
         return json_response(data=stats)
     except Exception as e:
         logger.error(f"获取监控统计失败: {e}")

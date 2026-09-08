@@ -350,10 +350,17 @@ class ApiClient {
   // ==================== 资源状态 API ====================
 
   /**
-   * 获取资源状态
+   * 获取资源状态（Client 连接状态等，Dashboard 顶部指示器数据源）
    */
   async getResourceStatus() {
     return this.request('GET', '/api/monitor/resource/status');
+  }
+
+  /**
+   * 获取监控统计（CPU/内存/磁盘/任务统计，Dashboard 资源卡片数据源）
+   */
+  async getMonitorStats() {
+    return this.request('GET', '/api/monitor/stats');
   }
 
   /**

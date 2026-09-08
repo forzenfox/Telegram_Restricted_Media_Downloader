@@ -61,6 +61,8 @@ asyncio_mode = "auto"
 "module/api/routes/tasks.py" = ["B008", "BLE001"]
 # config.py：路由层盲捕获统一风格（与 tasks.py 约定一致），导入排序已修复
 "module/api/routes/config.py" = ["BLE001"]
+# monitor.py 路由：盲捕获统一风格（与 config.py 约定一致）
+"module/api/routes/monitor.py" = ["BLE001"]
 # legacy_config.py：旧架构遗留语义/风格告警（盲捕获/可变类默认值/隐式 Optional/时区/导入顺序等），
 # 属历史存量，非本次只读挂载修复引入，按项目约定以 per-file 方式忽略
 "module/core/legacy_config.py" = ["BLE001", "DTZ005", "DTZ007", "I001", "PIE790", "RUF012", "S110", "SIM118", "UP007"]
@@ -74,6 +76,8 @@ asyncio_mode = "auto"
 # 属历史存量，非本次桥接改动引入，按项目约定以 per-file 方式忽略
 "module/core/task/executor.py" = ["B023", "BLE001", "RUF019", "S110", "UP017", "UP035", "UP045"]
 "module/core/integration.py" = ["BLE001", "S110"]
+# monitor.py：监控模块存量盲捕获 / try-except-pass / 函数内导入风格
+"module/core/monitor.py" = ["BLE001", "S110", "I001"]
 "module/core/task/manager.py" = ["RUF012", "SIM103"]
 "tests/unit/api/test_web_api.py" = ["RUF059"]
 "tests/unit/bot/test_bot_bridge.py" = ["RUF059"]

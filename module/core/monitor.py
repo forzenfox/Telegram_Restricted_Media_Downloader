@@ -16,10 +16,12 @@ class Monitor:
     def __init__(self):
         self._start_time = time.time()
 
-    def get_system_stats(self) -> dict:
+    def get_system_stats(self, disk_path: str | None = None) -> dict:
         """获取系统资源统计。
 
-        返回 CPU、内存、磁盘使用率。
+        Args:
+            disk_path: 磁盘统计路径；None 时使用当前工作目录。
+                传入配置的下载保存目录（如 Docker 挂载卷）可反映真实存储容量。
 
         Returns:
             {
@@ -30,11 +32,13 @@ class Monitor:
             }
         """
         try:
+            import os
+
             import psutil
 
             cpu_percent = psutil.cpu_percent(interval=0)
             memory = psutil.virtual_memory()
-            disk = psutil.disk_usage("/")
+            disk = psutil.disk_usage(disk_path or os.getcwd())
 
             return {
                 "cpu_percent": cpu_percent,
@@ -169,8 +173,9 @@ class Monitor:
 
         # 获取磁盘状态
         try:
-            import psutil
             import os
+
+            import psutil
 
             # 获取项目目录或使用根目录
             path = os.getcwd()
@@ -254,16 +259,19 @@ class Monitor:
         except Exception:
             return False
 
-    def get_monitor_stats(self, task_manager=None) -> dict:
+    def get_monitor_stats(self, task_manager=None, config_manager=None) -> dict:
         """获取完整监控统计（系统资源 + 任务统计）。
 
         Args:
             task_manager: TaskManager 实例
+            config_manager: ConfigManager 实例，用于解析下载保存目录
+                作为磁盘统计路径（Docker 挂载卷可反映真实存储容量）
 
         Returns:
             完整监控统计
         """
-        system_stats = self.get_system_stats()
+        disk_path = self._resolve_monitor_disk_path(config_manager)
+        system_stats = self.get_system_stats(disk_path=disk_path)
         task_stats = self.get_task_stats(task_manager)
 
         return {
@@ -271,3 +279,34 @@ class Monitor:
             "tasks": task_stats,
             "timestamp": time.time(),
         }
+
+    @staticmethod
+    def _resolve_monitor_disk_path(config_manager) -> str:
+        """确定磁盘统计路径：优先配置的下载保存目录，其次当前工作目录。
+
+        目录不存在时向上查找最近存在的父目录（与 TaskManager.check_disk_space
+        行为一致）；含占位符（如 {chat_type}）的目录无法在监控维度解析，直接回退。
+        """
+        import os
+
+        fallback = os.getcwd()
+        if config_manager is None:
+            return fallback
+        try:
+            save_dir = getattr(config_manager, "save_directory", None)
+        except Exception:
+            return fallback
+        save_dir = str(save_dir or "").strip()
+        if not save_dir or "{" in save_dir or "}" in save_dir:
+            return fallback
+
+        path = os.path.abspath(os.path.expanduser(save_dir))
+        if os.path.exists(path):
+            return path
+        parent = os.path.dirname(path)
+        while parent and not os.path.exists(parent):
+            grand = os.path.dirname(parent)
+            if grand == parent:
+                break
+            parent = grand
+        return parent if parent and os.path.exists(parent) else fallback
