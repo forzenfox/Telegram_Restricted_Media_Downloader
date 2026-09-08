@@ -98,7 +98,7 @@ class FileManager {
   /**
    * 创建上传任务
    * @param {Array} selectedFiles - 选中文件列表
-   * @param {string} targetChat - 目标频道
+   * @param {string} targetChat - 目标频道（支持纯数字 chat_id、@username、t.me 链接、+ 私有邀请）
    * @param {boolean} sendAsMediaGroup - 是否发送为媒体组
    * @param {boolean} deleteAfterUpload - 上传后是否删除本地文件
    */
@@ -108,20 +108,32 @@ class FileManager {
     }
 
     // 如果启用媒体组，按组拆分文件
-    const fileGroups = sendAsMediaGroup 
+    const fileGroups = sendAsMediaGroup
       ? this._splitIntoMediaGroups(selectedFiles)
       : [selectedFiles];
 
+    // 目标频道标识符归一化：纯数字走 chat_id，其它格式（@username / t.me
+    // 链接 / + 私有邀请）走 source_identifier，与 download/forward 任务
+    // 在前端层保持一致（后端路由对 chat_id 字段也做了非数字兜底）。
+    const trimmed = String(targetChat).trim();
+    const isNumeric = /^-?\d+$/.test(trimmed);
+
     // 为每个组创建上传任务
     for (const fileGroup of fileGroups) {
+      const params = {
+        file_paths: fileGroup.map(f => f.path),
+        send_as_media_group: sendAsMediaGroup && fileGroup.length > 1,
+        delete_after_upload: deleteAfterUpload,
+      };
+      if (isNumeric) {
+        params.chat_id = parseInt(trimmed, 10);
+      } else {
+        params.source_identifier = trimmed;
+      }
+
       const payload = {
         task_type: 'upload',
-        params: {
-          chat_id: targetChat,
-          file_paths: fileGroup.map(f => f.path),
-          send_as_media_group: sendAsMediaGroup && fileGroup.length > 1,
-          delete_after_upload: deleteAfterUpload,
-        },
+        params,
       };
 
       await api.createTask(payload);
