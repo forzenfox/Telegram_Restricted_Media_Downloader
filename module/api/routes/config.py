@@ -5,16 +5,17 @@
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, Request
 
-from module.api.dependencies import require_token, get_config_manager
-from module.api.responses import json_response, error_json_response
+from module.api.dependencies import get_config_manager, require_token
 from module.api.models.config import (
     ConfigOut,
     ConfigUpdate,
-    ResourceLimits,
     ProxyConfig,
+    ResourceLimits,
 )
+from module.api.responses import error_json_response, json_response
 
 router = APIRouter(prefix="/config", tags=["配置"])
 logger = logging.getLogger(__name__)
@@ -159,7 +160,16 @@ async def update_config(
 
         # 验证并保存配置
         if update_data:
-            config_manager.save_config(update_data)
+            save_ok = config_manager.save_config(update_data)
+            if not save_ok:
+                return error_json_response(
+                    code=1,
+                    message=(
+                        "配置文件保存失败：配置文件不可写（可能为只读挂载或权限不足）。"
+                        "若使用 Docker 部署，请检查 docker-compose.yml 中 config.yaml "
+                        "挂载是否带 :ro 只读标志并移除；详情请查看服务端日志。"
+                    ),
+                )
 
         return json_response(data={"message": "配置已更新"})
     except Exception as e:

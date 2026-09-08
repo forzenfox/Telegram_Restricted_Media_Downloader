@@ -42,6 +42,7 @@ ConfigBackup/
 # Build artifacts
 *.exe
 *.lock
+*.egg-info/
 
 # OS files
 .DS_Store

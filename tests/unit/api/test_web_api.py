@@ -1183,6 +1183,23 @@ class TestConfigEndpoints:
         resp = await ac.put("/api/config", json=body)
         assert resp.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_update_config_save_failure_returns_error(
+        self, client, config_manager
+    ):
+        """配置保存失败（如只读挂载）时应返回错误而非误报成功。
+
+        契约：save_config 返回 False 时，PUT /api/config 必须返回错误响应，
+        前端才能展示可操作的失败提示，而不是提示"配置已更新"。
+        """
+        ac, app, token = client
+        config_manager.save_config = lambda config: False
+        resp = await ac.put("/api/config", json={"download_type": ["video"]})
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["code"] != 0
+        assert "保存" in data["message"]
+
 
 # ==================== Pydantic 模型测试 ====================
 

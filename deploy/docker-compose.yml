@@ -8,7 +8,8 @@ services:
     ports:
       - "${HOST_PORT}:8000"
     volumes:
-      - ./config/config.yaml:/app/config.yaml:ro
+      # 配置（可写挂载，支持 WebUI 保存配置）
+      - ./config/config.yaml:/app/config.yaml
       - ./data/.trmd:/app/.trmd
       # 日志（目录挂载，自动持久化日志与轮转/备份文件）
       - ./logs:/app/logs

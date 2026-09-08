@@ -59,6 +59,11 @@ asyncio_mode = "auto"
 # - RUF059: 测试 fixture 固定解包约定（ac, app, token = client）
 # - B006、B023、TRY201、TRY203、RUF012、RUF013、SIM102、SIM103: 需人工判断的语义类告警
 "module/api/routes/tasks.py" = ["B008", "BLE001"]
+# config.py：路由层盲捕获统一风格（与 tasks.py 约定一致），导入排序已修复
+"module/api/routes/config.py" = ["BLE001"]
+# legacy_config.py：旧架构遗留语义/风格告警（盲捕获/可变类默认值/隐式 Optional/时区/导入顺序等），
+# 属历史存量，非本次只读挂载修复引入，按项目约定以 per-file 方式忽略
+"module/core/legacy_config.py" = ["BLE001", "DTZ005", "DTZ007", "I001", "PIE790", "RUF012", "S110", "SIM118", "UP007"]
 "module/core/download/client.py" = ["B006", "B008", "B023", "BLE001", "RUF013", "SIM102", "TRY201", "TRY203"]
 # downloader.py：旧架构遗留语义告警（盲捕获/时区/裸异常/隐式 Optional 等），
 # 属历史存量，非本次桥接改动引入，按项目约定以 per-file 方式忽略

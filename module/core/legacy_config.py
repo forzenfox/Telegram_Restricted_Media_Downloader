@@ -4,6 +4,7 @@
 # Time:2025/2/25 1:32
 # File:config.py
 import copy
+import errno
 import os
 import shutil
 import sys
@@ -547,7 +548,11 @@ class UserConfig(BaseConfig):
             console.log("配置文件与模板文件完全一致,无需备份。")
 
     def save_config(self, config: dict) -> None:
-        """保存配置文件。保留原始文件中的注释。"""
+        """保存配置文件。保留原始文件中的注释。
+
+        写入失败时记录日志并重新抛出异常，由调用方决定如何处理，
+        避免静默吞掉错误导致 WebUI 误报"配置已保存成功"。
+        """
         try:
             if self._raw_yaml_data is not None:
                 # 将 config 的变更合并到 _raw_yaml_data（保留注释）
@@ -559,8 +564,20 @@ class UserConfig(BaseConfig):
                 dump_yaml(config, self.config_path)
                 self._raw_yaml_data = load_yaml(self.config_path)
             log.info("配置文件已保存。")
+        except OSError as e:
+            if e.errno in (errno.EROFS, errno.EPERM, errno.EACCES):
+                log.error(
+                    f'保存配置文件失败,{_t(KeyWord.REASON)}:"{e}"。'
+                    "配置文件不可写(可能为只读挂载或权限不足)。"
+                    "若使用 Docker 部署,请检查 docker-compose.yml 中 config.yaml "
+                    "挂载是否带 :ro 只读标志并移除,或改为在宿主机上直接编辑配置文件。"
+                )
+            else:
+                log.error(f'保存配置文件失败,{_t(KeyWord.REASON)}:"{e}"')
+            raise
         except Exception as e:
             log.error(f'保存配置文件失败,{_t(KeyWord.REASON)}:"{e}"')
+            raise
 
     def ctrl_c(self):
         """服务退出时的处理（已移除暂停行为）。"""
