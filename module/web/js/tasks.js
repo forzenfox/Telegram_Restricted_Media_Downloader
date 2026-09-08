@@ -13,6 +13,7 @@ class TaskManager {
     this.filter = "all"; // all, pending, running, completed, failed, cancelled
     this.typeFilter = "all"; // all, download, forward, upload
     this.selectedTask = null;
+    this.selectedTasks = []; // 批量选择的任务 ID 列表（H2）
     this.showDetailDrawer = false;
     this.showCreateModal = false;
     this._pollTimer = null;
@@ -574,6 +575,152 @@ class TaskManager {
     } catch (error) {
       this._notify("error", `删除任务失败: ${error.message}`);
     }
+  }
+
+  // ==================== H2: 批量选择与批量操作 ====================
+
+  /**
+   * 判断任务是否已被选中
+   * @param {string} taskId - 任务 ID
+   * @returns {boolean}
+   */
+  isTaskSelected(taskId) {
+    return this.selectedTasks.includes(taskId);
+  }
+
+  /**
+   * 切换任务选中状态
+   * @param {string} taskId - 任务 ID
+   */
+  toggleTaskSelection(taskId) {
+    if (this.isTaskSelected(taskId)) {
+      this.selectedTasks = this.selectedTasks.filter((id) => id !== taskId);
+    } else {
+      this.selectedTasks = [...this.selectedTasks, taskId];
+    }
+    this._syncSelectedToAlpine();
+  }
+
+  /**
+   * 全选当前页任务
+   */
+  selectAllTasks() {
+    this.selectedTasks = this.tasks.map((task) => task.id);
+    this._syncSelectedToAlpine();
+  }
+
+  /**
+   * 切换全选：若当前页全部已选则清空，否则全选当前页
+   */
+  toggleSelectAll() {
+    if (this.isAllSelected()) {
+      this.clearSelection();
+    } else {
+      this.selectAllTasks();
+    }
+  }
+
+  /**
+   * 当前页任务是否全部选中
+   * @returns {boolean}
+   */
+  isAllSelected() {
+    return (
+      this.tasks.length > 0 &&
+      this.tasks.every((task) => this.isTaskSelected(task.id))
+    );
+  }
+
+  /**
+   * 清空批量选择
+   */
+  clearSelection() {
+    this.selectedTasks = [];
+    this._syncSelectedToAlpine();
+  }
+
+  /**
+   * 将选中状态同步到 Alpine 响应式数据
+   */
+  _syncSelectedToAlpine() {
+    const alpineRoot = document.querySelector("[x-data]");
+    const alpineData =
+      alpineRoot && window.Alpine ? window.Alpine.$data(alpineRoot) : null;
+    if (alpineData) {
+      alpineData.selectedTasks = this.selectedTasks;
+    }
+  }
+
+  /**
+   * 批量取消任务
+   */
+  async batchCancelTasks() {
+    if (this.selectedTasks.length === 0) return;
+
+    // ✅ 使用自定义 ConfirmDialog 组件确认（P2-3）
+    const confirmed = await window.confirmDialog.show({
+      title: "批量取消任务",
+      message: `<p>确定要取消选中的 <strong>${this.selectedTasks.length}</strong> 个任务吗？</p>`,
+      type: "warning",
+      confirmText: "确认取消",
+      cancelText: "取消",
+    });
+    if (!confirmed) return;
+
+    const ids = [...this.selectedTasks];
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await api.cancelTask(id);
+      } catch (error) {
+        failed++;
+        console.error(`取消任务 ${id} 失败:`, error);
+      }
+    }
+
+    this.clearSelection();
+    if (failed > 0) {
+      this._notify("error", `批量取消完成，${failed} 个任务取消失败`);
+    } else {
+      this._notify("success", `已取消 ${ids.length} 个任务`);
+    }
+    await this.loadTasks(true);
+  }
+
+  /**
+   * 批量删除任务
+   */
+  async batchDeleteTasks() {
+    if (this.selectedTasks.length === 0) return;
+
+    // ✅ 使用自定义 ConfirmDialog 组件确认（P2-3）
+    const confirmed = await window.confirmDialog.show({
+      title: "批量删除任务",
+      message: `<p>确定要删除选中的 <strong>${this.selectedTasks.length}</strong> 个任务吗？</p><p class="text-red-600 text-xs mt-2">此操作不可撤销。</p>`,
+      type: "danger",
+      confirmText: "确认删除",
+      cancelText: "取消",
+    });
+    if (!confirmed) return;
+
+    const ids = [...this.selectedTasks];
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await api.deleteTask(id);
+      } catch (error) {
+        failed++;
+        console.error(`删除任务 ${id} 失败:`, error);
+      }
+    }
+
+    this.clearSelection();
+    if (failed > 0) {
+      this._notify("error", `批量删除完成，${failed} 个任务删除失败`);
+    } else {
+      this._notify("success", `已删除 ${ids.length} 个任务`);
+    }
+    await this.loadTasks(true);
   }
 
   /**

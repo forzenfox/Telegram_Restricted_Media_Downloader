@@ -41,7 +41,7 @@
   >
     <!-- 移动端侧边栏遮罩 -->
     <div 
-      x-show="mobileSidebarOpen" 
+      x-show="mobileSidebarOpen" x-cloak
       x-transition:enter="transition-opacity ease-linear duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -305,17 +305,89 @@
             </div>
           </div>
 
-          <div x-show="tasks.length === 0" class="py-8 text-center">
+          <!-- 批量操作栏（H2：勾选任务后显示） -->
+          <div
+            x-show="selectedTasks.length > 0"
+            data-testid="batch-action-bar"
+            class="mb-4 px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-lg flex flex-wrap items-center gap-3"
+          >
+            <span data-testid="batch-selected-count" class="text-sm text-slate-300" x-text="`已选 ${selectedTasks.length} 个任务`"></span>
+            <button
+              data-testid="btn-batch-cancel"
+              @click="batchCancelTasks()"
+              x-show="selectedTasks.length > 0"
+              class="btn btn-sm btn-warning"
+            >
+              批量取消
+            </button>
+            <button
+              data-testid="btn-batch-delete"
+              @click="batchDeleteTasks()"
+              x-show="selectedTasks.length > 0"
+              class="btn btn-sm btn-error"
+            >
+              批量删除
+            </button>
+            <button
+              data-testid="btn-batch-clear"
+              @click="clearBatchSelection()"
+              class="btn btn-sm btn-secondary ml-auto"
+            >
+              清除选择
+            </button>
+          </div>
+
+          <!-- 无任务空态（H3：无任何筛选时显示 CTA） -->
+          <div
+            x-show="tasks.length === 0 && currentFilter === 'all' && currentTypeFilter === 'all'"
+            class="py-8 text-center"
+          >
             <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
             </svg>
             <p class="text-slate-400 mt-2">暂无任务</p>
+            <button
+              data-testid="empty-tasks-cta"
+              @click="openCreateModal()"
+              class="btn btn-primary mt-4"
+            >
+              新建任务
+            </button>
+          </div>
+
+          <!-- 筛选无结果空态（H3：有筛选条件时提示清除筛选） -->
+          <div
+            data-testid="empty-filter-result"
+            x-show="tasks.length === 0 && (currentFilter !== 'all' || currentTypeFilter !== 'all')"
+            class="py-8 text-center"
+          >
+            <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+            </svg>
+            <p class="text-slate-400 mt-2">没有符合筛选条件的任务</p>
+            <button
+              data-testid="btn-clear-filter"
+              @click="clearFilters()"
+              class="btn btn-secondary mt-4"
+            >
+              清除筛选
+            </button>
           </div>
 
           <div x-show="tasks.length > 0" class="overflow-x-auto">
             <table data-testid="tasks-table" class="table">
               <thead data-testid="tasks-table-header">
                 <tr>
+                  <th class="w-10">
+                    <input
+                      type="checkbox"
+                      data-testid="select-all-tasks"
+                      @change="toggleSelectAll()"
+                      :checked="isAllSelected()"
+                      class="h-4 w-4 cursor-pointer"
+                      title="全选当前页"
+                    >
+                  </th>
                   <th>ID</th>
                   <th>类型</th>
                   <th>状态</th>
@@ -331,6 +403,16 @@
                     @click="viewTaskDetail(task)"
                     class="cursor-pointer"
                   >
+                    <td class="w-10" @click.stop>
+                      <input
+                        type="checkbox"
+                        data-testid="task-checkbox"
+                        :checked="isTaskSelected(task.id)"
+                        @change="toggleTaskSelection(task.id)"
+                        @click.stop
+                        class="h-4 w-4 cursor-pointer"
+                      >
+                    </td>
                     <td data-testid="task-id" class="font-mono text-sm" x-text="`#${task.id}`"></td>
                     <td data-testid="task-type">
                       <span x-text="taskManager.getTypeText(task.task_type)"></span>
@@ -435,7 +517,7 @@
     <!-- 任务详情抽屉 -->
     <div
       data-testid="drawer-task-detail"
-      x-show="showDetailDrawer"
+      x-show="showDetailDrawer" x-cloak
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -706,7 +788,7 @@
     <!-- 创建任务弹窗 -->
     <div
       data-testid="modal-create-task"
-      x-show="showCreateModal"
+      x-show="showCreateModal" x-cloak
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -1060,7 +1142,7 @@
     <!-- P0-2: 资源保护告警弹窗（使用 Alpine 响应式镜像属性驱动 x-show） -->
     <div
       data-testid="modal-resource-alert"
-      x-show="showResourceAlert"
+      x-show="showResourceAlert" x-cloak
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -1140,7 +1222,7 @@
 
   <!-- 通用确认对话框组件 (P2-3: 替代原生 confirm) -->
   <div x-data="{ dialog: window.confirmDialog }"
-       x-show="dialog.visible"
+       x-show="dialog.visible" x-cloak
        data-testid="confirm-dialog"
        x-transition:enter="transition ease-out duration-300"
        x-transition:enter-start="opacity-0"
@@ -1277,6 +1359,10 @@
         // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 :class 更新）
         currentFilter: 'all',
         currentTypeFilter: 'all',
+
+        // 批量选择响应式镜像（taskManager.selectedTasks 是非响应式全局对象，
+        // 通过 _syncSelectedToAlpine 同步以驱动 x-show/x-text 更新）
+        selectedTasks: [],
 
         // 翻页/筛选导航标志：阻止智能轮询的 loadTasks() 覆盖导航请求的结果
         _navigating: false,
@@ -1484,6 +1570,45 @@
           taskManager.setTypeFilter(filter);
           this._syncFilters();
           this.refreshTasks();
+        },
+
+        // ==================== H2: 批量操作接线 ====================
+
+        // 清除筛选（H3：筛选无结果空态按钮）
+        clearFilters() {
+          this.currentFilter = 'all';
+          this.currentTypeFilter = 'all';
+          taskManager.filter = 'all';
+          taskManager.typeFilter = 'all';
+          this.refreshTasks();
+        },
+
+        isTaskSelected(taskId) {
+          return taskManager.isTaskSelected(taskId);
+        },
+
+        toggleTaskSelection(taskId) {
+          taskManager.toggleTaskSelection(taskId);
+        },
+
+        toggleSelectAll() {
+          taskManager.toggleSelectAll();
+        },
+
+        isAllSelected() {
+          return taskManager.isAllSelected();
+        },
+
+        clearBatchSelection() {
+          taskManager.clearSelection();
+        },
+
+        async batchCancelTasks() {
+          await taskManager.batchCancelTasks();
+        },
+
+        async batchDeleteTasks() {
+          await taskManager.batchDeleteTasks();
         },
 
         async prevPage() {

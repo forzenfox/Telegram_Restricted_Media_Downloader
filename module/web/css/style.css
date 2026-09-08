@@ -39,6 +39,14 @@ body {
   line-height: 1.5;
 }
 
+/* ==================== FOUC 防护 ==================== */
+/* Alpine.js 初始化前隐藏所有带 x-cloak 的元素，防止弹框/遮罩层
+   在页面加载瞬间闪现（生产环境静态资源加载慢时尤为明显）。
+   Alpine 初始化完成后会自动移除 x-cloak 属性，由 x-show 无缝接管。 */
+[x-cloak] {
+  display: none !important;
+}
+
 /* ==================== 滚动条样式 ==================== */
 ::-webkit-scrollbar {
   width: 8px;

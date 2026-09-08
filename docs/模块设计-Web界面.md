@@ -234,6 +234,12 @@ Alpine.store('app', {
 3. **错误统一进入 Store**：所有 API 错误写入 `$store.app.notifications`，由全局通知组件渲染。
 4. **轮询数据合并**：不覆盖整列表，而是按任务 ID 做局部更新，减少 DOM 抖动。
 
+### 3.6 弹框/遮罩 FOUC 防护（x-cloak）
+
+所有弹框、抽屉、遮罩等全屏覆盖层元素均由 `x-show` 控制显隐。`x-show` 仅在 Alpine.js 初始化完成后生效：初始化之前元素默认可见，若静态资源（`vendor/alpinejs.js` 为 body 末尾最后一个阻塞脚本）加载慢于浏览器首帧渲染，页面加载瞬间会闪现全部弹框（生产环境网络延迟下可见，本地磁盘加载无感）。
+
+**约定**：fixed 定位且由 `x-show` 控制显隐（非常显）的覆盖层元素必须同时携带 `x-cloak`，配合 style.css 的 `[x-cloak] { display: none !important; }` 规则，在 Alpine 初始化前保持隐藏；初始化完成后 Alpine 自动移除 `x-cloak`，由 `x-show` 无缝接管。该约定由契约测试 `TestOverlayFOUC`（tests/unit/api/test_web_ui_templates.py）强制校验。
+
 ---
 
 ## 4. 与后端交互方式（REST API 调用与轮询）
