@@ -79,6 +79,8 @@ asyncio_mode = "auto"
 # monitor.py：监控模块存量盲捕获 / try-except-pass / 函数内导入风格
 "module/core/monitor.py" = ["BLE001", "S110", "I001"]
 "module/core/task/manager.py" = ["RUF012", "SIM103"]
+# notifier.py：通知为尽力而为，任意发送异常都不应影响任务状态流转（与 executor.py 旧口径一致）
+"module/core/task/notifier.py" = ["BLE001"]
 "tests/unit/api/test_web_api.py" = ["RUF059"]
 "tests/unit/bot/test_bot_bridge.py" = ["RUF059"]
 "tests/unit/core/task/test_executor.py" = ["I001", "RUF015", "UP017"]

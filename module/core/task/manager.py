@@ -286,8 +286,14 @@ class TaskManager:
         min_disk_space_gb: int = 2,
         identifier_service: Optional["IdentifierService"] = None,
         config_manager: Optional["ConfigManager"] = None,
+        max_download_tasks: int | None = None,
+        max_upload_tasks: int | None = None,
     ):
         self._max_concurrent_tasks = max_concurrent_tasks
+        # 按类型独立并发限制：DOWNLOAD / UPLOAD 各自最多 N 个，互不阻塞；
+        # 为 None 时回退全局 max_concurrent_tasks 闸。
+        self._max_download_tasks = max_download_tasks
+        self._max_upload_tasks = max_upload_tasks
         self._max_retry_count = max_retry_count
         self._task_size_warning_gb = task_size_warning_gb
         self._task_size_max_gb = task_size_max_gb
@@ -302,6 +308,8 @@ class TaskManager:
         self._items_loaded: set[str] = set()
         # 任务执行器（由外部在创建后注入，用于真正触发任务执行）
         self._executor: Any | None = None
+        # 任务终态通知器（由外部在创建后注入；未注入时终态通知关闭，行为不变）
+        self._notifier: Any | None = None
         # 注意：建表由 module.core.db.init_db 统一处理；
         #       历史任务加载由 initialize() 异步完成。
 
@@ -312,6 +320,24 @@ class TaskManager:
         提交到正确的异步事件循环执行。当任务被调度为 RUNNING 时触发。
         """
         self._executor = executor
+
+    def set_notifier(self, notifier: Any) -> None:
+        """注入任务终态通知器。
+
+        被注入的 notifier 必须提供 notify_completed(task) / notify_failed(task)
+        异步方法；任务进入终态（completed / failed）时触发（fire-and-forget），
+        不阻塞状态机。未注入时通知功能关闭，任务流程不受影响。
+        """
+        self._notifier = notifier
+
+    def _notify(self, task: "Task", kind: str) -> None:
+        """触发终态通知（fire-and-forget，失败由通知器内部吞掉）。"""
+        if self._notifier is None:
+            return
+        method = getattr(self._notifier, kind, None)
+        if method is None:
+            return
+        asyncio.create_task(method(task))
 
     async def _dispatch(self, task: Task) -> None:
         """将任务提交到 executor 执行（仅当 executor 存在时）。"""
@@ -499,11 +525,37 @@ class TaskManager:
         if target not in allowed:
             raise TaskStateError(f"无效状态转换: {current.value} → {target.value}")
 
-    def _get_running_count(self) -> int:
-        """获取当前正在运行的任务数。"""
-        return sum(
-            1 for task in self._tasks.values() if task.status == TaskStatus.RUNNING
-        )
+    def _limit_for(self, task_type: TaskType) -> int:
+        """返回指定任务类型的并发上限。
+
+        DOWNLOAD / UPLOAD 配置了按类型限制时返回该限制，
+        否则（含其它类型）回退全局 ``max_concurrent_tasks`` 闸。
+        """
+        if task_type == TaskType.DOWNLOAD and self._max_download_tasks is not None:
+            return self._max_download_tasks
+        if task_type == TaskType.UPLOAD and self._max_upload_tasks is not None:
+            return self._max_upload_tasks
+        return self._max_concurrent_tasks
+
+    def _get_running_count(self, task_type: TaskType | None = None) -> int:
+        """获取当前运行中的一次性任务数（常驻 running 型任务不计入）。
+
+        常驻型任务（RESIDENT_RUNNING_TASK_TYPES，如监听/定时清理）生命周期
+        贯穿进程，不应占用一次性任务的并发槽位；否则会永久阻塞其它任务。
+
+        Args:
+            task_type: 传入时只统计该类型的运行中任务数（仍排除常驻型）。
+        """
+        count = 0
+        for task in self._tasks.values():
+            if task.status != TaskStatus.RUNNING:
+                continue
+            if task.task_type in RESIDENT_RUNNING_TASK_TYPES:
+                continue
+            if task_type is not None and task.task_type != task_type:
+                continue
+            count += 1
+        return count
 
     # ============================================================
     # 公开接口
@@ -720,8 +772,9 @@ class TaskManager:
             if not task:
                 raise TaskNotFoundError(f"任务不存在: {task_id}")
 
-            running_count = self._get_running_count()
-            if running_count >= self._max_concurrent_tasks:
+            running_count = self._get_running_count(task.task_type)
+            limit = self._limit_for(task.task_type)
+            if running_count >= limit:
                 # 进入队列
                 self._validate_transition(task.status, TaskStatus.QUEUED)
                 task.status = TaskStatus.QUEUED
@@ -756,6 +809,9 @@ class TaskManager:
             # 尝试启动队列中的下一个任务
             await self._process_queue()
 
+            # 触发完成通知（fire-and-forget，不阻塞状态机与队列调度）
+            self._notify(task, "notify_completed")
+
     async def fail_task(self, task_id: str, reason: str):
         """标记任务失败。"""
         async with self._lock:
@@ -771,6 +827,9 @@ class TaskManager:
 
             # 尝试启动队列中的下一个任务
             await self._process_queue()
+
+            # 触发错误通知（fire-and-forget，不阻塞状态机与队列调度）
+            self._notify(task, "notify_failed")
 
     async def cancel_task(self, task_id: str, reason: str | None = None):
         """取消任务。"""
@@ -1154,16 +1213,24 @@ class TaskManager:
         log.info("TaskManager 已关闭")
 
     async def _process_queue(self):
-        """处理任务队列，尝试启动排队的任务。"""
-        while (
-            self._task_queue and self._get_running_count() < self._max_concurrent_tasks
-        ):
-            next_task_id = self._task_queue.pop(0)
+        """处理任务队列，尝试启动排队的任务。
+
+        按队头任务类型判断并发槽位：队头类型（DOWNLOAD/UPLOAD）未满则启动，
+        否则保持 FIFO 不插队。常驻型任务不占用并发槽位。
+        """
+        while self._task_queue:
+            next_task_id = self._task_queue[0]
             task = self._tasks.get(next_task_id)
-            if task and task.status == TaskStatus.QUEUED:
-                task.status = TaskStatus.RUNNING
-                task.started_at = datetime.now(UTC)
-                await self._save_task(task)
-                log.info(f"队列任务已启动: {next_task_id}")
-                # 任务正式 RUNNING 后提交执行，保证状态机与执行同步
-                await self._dispatch(task)
+            if not task or task.status != TaskStatus.QUEUED:
+                self._task_queue.pop(0)
+                continue
+            limit = self._limit_for(task.task_type)
+            if self._get_running_count(task.task_type) >= limit:
+                break  # 队头类型槽位满，保持 FIFO 不插队
+            self._task_queue.pop(0)
+            task.status = TaskStatus.RUNNING
+            task.started_at = datetime.now(UTC)
+            await self._save_task(task)
+            log.info(f"队列任务已启动: {next_task_id}")
+            # 任务正式 RUNNING 后提交执行，保证状态机与执行同步
+            await self._dispatch(task)

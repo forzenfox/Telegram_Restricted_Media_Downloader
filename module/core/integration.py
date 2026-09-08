@@ -102,8 +102,15 @@ class AppContext:
     def _init_task_manager(self) -> TaskManager:
         """初始化 TaskManager。"""
         rl = self.config_manager.resource_limits
+        # 读取 config.yaml 的 task.max_tasks（download/upload 按类型独立并发），
+        # 缺失时为 None → 回退全局 max_concurrent_tasks 闸，行为与现状一致。
+        raw_config = self.config_manager.load_config(mask_sensitive=False) or {}
+        task_cfg = (raw_config.get("task") or {}) or {}
+        max_tasks = (task_cfg.get("max_tasks") or {}) or {}
         tm = TaskManager(
             max_concurrent_tasks=rl.get("max_concurrent_tasks", 1),
+            max_download_tasks=max_tasks.get("download"),
+            max_upload_tasks=max_tasks.get("upload"),
             max_retry_count=5,
             task_size_warning_gb=rl.get("task_size_warning_gb", 5),
             task_size_max_gb=rl.get("task_size_max_gb", 10),

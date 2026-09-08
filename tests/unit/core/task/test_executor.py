@@ -22,6 +22,7 @@ from pyrogram.errors.exceptions.bad_request_400 import (
     ChatForwardsRestricted as ChatForwardsRestricted_400,
 )
 
+from module.core.config_manager import ConfigManager
 from module.core.task.executor import TaskExecutor
 from module.core.task.manager import (
     TaskManager,
@@ -3868,10 +3869,84 @@ class TestExecuteCleanup:
 
         task = await task_manager.create_task(
             task_type=TaskType.CLEANUP_FILES,
-            params={"keep_days": 7, "schedule": {"mode": "interval", "interval_hours": 24}},
+            params={
+                "keep_days": 7,
+                "schedule": {"mode": "interval", "interval_hours": 24},
+            },
         )
         await task_manager.start_task(task.task_id)
         await executor.execute_task(task)
 
         assert not stale.exists()
         assert not sub.exists()  # 空目录已被清理
+
+
+# ============================================================
+# 测试：并发信号量读取 task.max_tasks（组合修复）
+# ============================================================
+
+
+class TestSemaphoreConcurrencyFromConfig:
+    """测试 TaskExecutor 并发信号量初始值来自 config.yaml 的 task.max_tasks。
+
+    契约：task.max_tasks.download / task.max_tasks.upload 优先，
+    缺失时回退 resource_limits（max_download_concurrency / max_upload_concurrency）。
+    """
+
+    @staticmethod
+    def _make_mock_cm(load_config_result: dict, resource_limits: dict):
+        """构造一个可读 resource_limits 与 load_config 的 mock ConfigManager。"""
+        cm = MagicMock(spec=ConfigManager)
+        cm.resource_limits = resource_limits
+        cm.load_config = MagicMock(return_value=load_config_result)
+        return cm
+
+    def test_semaphore_concurrency_reads_task_max_tasks(self):
+        """task.max_tasks 已配置时应覆盖 resource_limits 作为 semaphore 初始值。"""
+        cm = self._make_mock_cm(
+            load_config_result={"task": {"max_tasks": {"download": 4, "upload": 4}}},
+            resource_limits={
+                "max_download_concurrency": 3,
+                "max_upload_concurrency": 1,
+                "max_forward_concurrency": 1,
+            },
+        )
+        executor = TaskExecutor(
+            task_manager=MagicMock(),
+            file_manager=MagicMock(),
+            client=MagicMock(),
+            config_manager=cm,
+        )
+        assert executor._download_semaphore._value == 4
+        assert executor._upload_semaphore._value == 4
+        assert executor._forward_semaphore._value == 1
+
+    def test_semaphore_concurrency_falls_back_to_resource_limits(self):
+        """未配置 task.max_tasks 时应回退 resource_limits（3 / 1）。"""
+        cm = self._make_mock_cm(
+            load_config_result={},  # 无 task.max_tasks
+            resource_limits={
+                "max_download_concurrency": 3,
+                "max_upload_concurrency": 1,
+                "max_forward_concurrency": 1,
+            },
+        )
+        executor = TaskExecutor(
+            task_manager=MagicMock(),
+            file_manager=MagicMock(),
+            client=MagicMock(),
+            config_manager=cm,
+        )
+        assert executor._download_semaphore._value == 3
+        assert executor._upload_semaphore._value == 1
+
+    def test_semaphore_concurrency_defaults_when_no_config_manager(self):
+        """config_manager 为 None 时应保持默认 3 / 1 / 1。"""
+        executor = TaskExecutor(
+            task_manager=MagicMock(),
+            file_manager=MagicMock(),
+            client=MagicMock(),
+        )
+        assert executor._download_semaphore._value == 3
+        assert executor._upload_semaphore._value == 1
+        assert executor._forward_semaphore._value == 1

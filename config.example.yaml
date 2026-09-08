@@ -53,6 +53,11 @@ preference:
   is_shutdown: false    # 关机标志，设为 true 时服务将停止接受新任务
   notice: true          # 是否启用通知提醒
 
+  # 通知配置（WebUI「通知配置」页可编辑，保存后持久化于此）
+  # 注意：完成/错误通知的实际发送需对应 Bot 通知逻辑读取这些开关
+  notification_enabled: false          # 启用完成通知：任务完成后发送通知到 Bot
+  error_notification_enabled: false    # 启用错误通知：任务失败时发送通知到 Bot
+
   # 上传相关设置
   upload:
     delete: false          # 上传完成后是否删除本地文件

@@ -70,6 +70,9 @@ async def get_config(
         # 构建上传配置
         upload_data = config.get("upload", {})
 
+        # 通知配置：读取 preference 区块
+        pref_data = config.get("preference", {}) or {}
+
         result = ConfigOut(
             api_id=config.get("api_id", "***"),
             api_hash=config.get("api_hash", "***"),
@@ -82,6 +85,10 @@ async def get_config(
             upload_max_group_size=upload_data.get("max_group_size", 10),
             save_directory=config.get("save_directory", "downloads"),
             temp_directory=config.get("temp_directory", "temp"),
+            notification_enabled=bool(pref_data.get("notification_enabled", False)),
+            error_notification_enabled=bool(
+                pref_data.get("error_notification_enabled", False)
+            ),
         )
 
         return json_response(data=result.model_dump(mode="json"))
@@ -157,6 +164,21 @@ async def update_config(
             upload_data["max_group_size"] = body.upload_max_group_size
         if upload_data:
             update_data["upload"] = upload_data
+
+        # 通知配置：合并到 preference 区块，避免覆盖其它偏好字段
+        if (
+            body.notification_enabled is not None
+            or body.error_notification_enabled is not None
+        ):
+            current = config_manager.load_config(mask_sensitive=False) or {}
+            pref_data = dict(current.get("preference", {}) or {})
+            if body.notification_enabled is not None:
+                pref_data["notification_enabled"] = body.notification_enabled
+            if body.error_notification_enabled is not None:
+                pref_data["error_notification_enabled"] = (
+                    body.error_notification_enabled
+                )
+            update_data["preference"] = pref_data
 
         # 验证并保存配置
         if update_data:

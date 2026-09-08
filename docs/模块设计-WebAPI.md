@@ -891,6 +891,8 @@ class ConfigOut(BaseModel):
     download_type: list[str]
     max_retry_count: int
     repository: RepositoryConfig = RepositoryConfig()
+    notification_enabled: bool = False            # 启用完成通知（持久化于 config.yaml 的 preference 区块）
+    error_notification_enabled: bool = False      # 启用错误通知（持久化于 config.yaml 的 preference 区块）
 
 
 class ConfigUpdate(BaseModel):
@@ -899,6 +901,8 @@ class ConfigUpdate(BaseModel):
     download_type: Optional[list[str]] = None
     max_retry_count: Optional[int] = None
     repository: Optional[RepositoryConfig] = None
+    notification_enabled: Optional[bool] = None       # 更新时合并写入 preference.notification_enabled
+    error_notification_enabled: Optional[bool] = None # 更新时合并写入 preference.error_notification_enabled
 ```
 
 > **配置合并说明**：原 `config.yaml` 与 `global_config.yaml` 已合并为单一 `config.yaml`，`repository` 节为新增配置段。

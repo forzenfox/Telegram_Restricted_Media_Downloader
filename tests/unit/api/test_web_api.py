@@ -1200,6 +1200,91 @@ class TestConfigEndpoints:
         assert data["code"] != 0
         assert "保存" in data["message"]
 
+    @pytest.mark.asyncio
+    async def test_get_config_returns_notification_defaults(self, client):
+        """未配置通知开关时 GET /api/config 应默认返回 False。
+
+        契约：前端刷新后，notification_enabled / error_notification_enabled
+        必须始终为布尔值（存在性契约），而不能是 undefined 导致 checkbox 恒空。
+        """
+        ac, app, token = client
+        resp = await ac.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["code"] == 0
+        assert data["data"]["notification_enabled"] is False
+        assert data["data"]["error_notification_enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_config_returns_stored_notification_flags(
+        self, client, config_manager
+    ):
+        """preference 区块已存储通知开关时 GET 应返回存储的真值。
+
+        契约：保存成功后刷新，勾选状态必须回显而非被重置。
+        """
+        ac, app, token = client
+        config_manager.config["preference"] = {
+            "notification_enabled": True,
+            "error_notification_enabled": True,
+            "notice": True,
+        }
+        resp = await ac.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["data"]["notification_enabled"] is True
+        assert data["data"]["error_notification_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_config_notification_flags(self, client, config_manager):
+        """PUT /api/config 应持久化通知开关到 preference 区块。
+
+        契约：通知开关被保存；仅更新传入字段时，不得丢失其它偏好字段（合并语义）。
+        """
+        ac, app, token = client
+        captured = []
+
+        def _spy_save(config_data):
+            captured.append(config_data)
+            return True
+
+        config_manager.save_config = _spy_save
+
+        # 场景A：同时更新两个通知开关
+        resp = await ac.put(
+            "/api/config",
+            json={"notification_enabled": True, "error_notification_enabled": True},
+        )
+        assert resp.status_code == 200
+        assert captured[-1]["preference"]["notification_enabled"] is True
+        assert captured[-1]["preference"]["error_notification_enabled"] is True
+
+        # 场景B：仅更新 notification_enabled，应保留已有的 error_notification_enabled
+        config_manager.config["preference"] = {"error_notification_enabled": True}
+        resp = await ac.put("/api/config", json={"notification_enabled": True})
+        assert resp.status_code == 200
+        assert captured[-1]["preference"]["notification_enabled"] is True
+        assert captured[-1]["preference"]["error_notification_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_config_notification_preserves_other_preference(
+        self, client, config_manager
+    ):
+        """更新通知开关时应保留 preference 区块其它偏好字段。"""
+        ac, app, token = client
+        captured = []
+        config_manager.save_config = lambda config: (captured.append(config), True)[1]
+        config_manager.config["preference"] = {
+            "forward_type": "media",
+            "notice": True,
+        }
+        resp = await ac.put("/api/config", json={"notification_enabled": True})
+        assert resp.status_code == 200
+        pref = captured[-1]["preference"]
+        assert pref["notification_enabled"] is True
+        assert pref["forward_type"] == "media"
+        assert pref["notice"] is True
+
 
 # ==================== Pydantic 模型测试 ====================
 
@@ -1709,7 +1794,9 @@ class TestBatchDeleteFiles:
         outside = tmp_path.parent / "outside.jpg"
         outside.write_bytes(b"o")
 
-        resp = await ac.request("DELETE", "/api/files/batch", json={"file_paths": [str(outside)]})
+        resp = await ac.request(
+            "DELETE", "/api/files/batch", json={"file_paths": [str(outside)]}
+        )
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["failed"] == 1

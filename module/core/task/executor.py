@@ -84,16 +84,23 @@ class TaskExecutor:
         except RuntimeError:
             self._event_loop = None
 
-        # 并发控制：从 ConfigManager 读取，默认值与 DEFAULT_RESOURCE_LIMITS 一致
+        # 并发控制：task.max_tasks 优先（download/upload 按类型独立并发），
+        # 其次读取 ConfigManager.resource_limits，默认值与 DEFAULT_RESOURCE_LIMITS 一致
+        rl = {}
+        task_cfg = {}
         if config_manager:
-            rl = config_manager.resource_limits
-            dl_concurrency = rl.get("max_download_concurrency", 3)
-            ul_concurrency = rl.get("max_upload_concurrency", 1)
-            fwd_concurrency = rl.get("max_forward_concurrency", 1)
-        else:
-            dl_concurrency = 3
-            ul_concurrency = 1
-            fwd_concurrency = 1
+            try:
+                rl = config_manager.resource_limits or {}
+                raw_config = config_manager.load_config(mask_sensitive=False) or {}
+                task_cfg = (raw_config.get("task") or {}) or {}
+            except Exception:
+                pass
+        max_tasks = (task_cfg.get("max_tasks") or {}) or {}
+        dl_concurrency = max_tasks.get("download") or rl.get(
+            "max_download_concurrency", 3
+        )
+        ul_concurrency = max_tasks.get("upload") or rl.get("max_upload_concurrency", 1)
+        fwd_concurrency = rl.get("max_forward_concurrency", 1)
 
         self._download_semaphore = asyncio.Semaphore(dl_concurrency)
         self._upload_semaphore = asyncio.Semaphore(ul_concurrency)

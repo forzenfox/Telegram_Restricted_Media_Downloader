@@ -103,6 +103,12 @@ class TestInitTaskExecutorRecovery:
             chat_id=-1001234567890,
             params={"message_range_start": 1, "message_range_end": 10},
         )
+        # 第二个运行中下载任务：填满 download 并发（常驻监听任务不再占用并发槽位）
+        running_dl2 = await tm1.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 101, "message_range_end": 110},
+        )
         listen = await tm1.create_task(
             task_type=TaskType.LISTEN_DOWNLOAD,
             chat_id=-1001234567890,
@@ -114,6 +120,7 @@ class TestInitTaskExecutorRecovery:
             params={"message_range_start": 11, "message_range_end": 20},
         )
         await tm1.start_task(running_dl.task_id)  # RUNNING
+        await tm1.start_task(running_dl2.task_id)  # RUNNING
         await tm1.start_task(listen.task_id)  # RUNNING
         await tm1.start_task(queued.task_id)  # QUEUED
         assert queued.status == TaskStatus.QUEUED
@@ -134,6 +141,9 @@ class TestInitTaskExecutorRecovery:
         assert rd is not None
         assert rd.status == TaskStatus.FAILED
         assert "重启" in (rd.error_message or "")
+        rd2 = await tm2.get_task(running_dl2.task_id)
+        assert rd2 is not None
+        assert rd2.status == TaskStatus.FAILED
 
         # 监听任务保持 running，且 recover_listeners 被调用
         lk = await tm2.get_task(listen.task_id)

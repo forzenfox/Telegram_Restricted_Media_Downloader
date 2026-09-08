@@ -11,6 +11,7 @@
 - SQLite 持久化
 """
 
+import asyncio
 import os
 import sqlite3
 import tempfile
@@ -2005,3 +2006,225 @@ class TestRestartRecovery:
         t2_reloaded = await tm.get_task(t2.task_id)
         assert t2_reloaded.status == TaskStatus.RUNNING
         await db.close_db()
+
+
+# ============================================================
+# 测试：常驻任务不计入并发 + 按类型独立并发（组合修复）
+# ============================================================
+
+
+class TestTypeAwareConcurrency:
+    """测试组合修复：
+
+    A. 常驻 running 型任务（RESIDENT_RUNNING_TASK_TYPES）不占用一次性任务并发槽位；
+    B. config.yaml 的 task.max_tasks.download / task.max_tasks.upload 真正生效：
+       download 与 upload 按类型独立并发（各自最多 N 个，互不阻塞），
+       其它类型沿用全局 max_concurrent_tasks 闸；未配置类型限制时回退全局闸。
+    """
+
+    @staticmethod
+    async def _make_upload(tm, file_path: str):
+        return await tm.create_task(
+            task_type=TaskType.UPLOAD,
+            chat_id=-1001234567890,
+            params={"file_paths": [file_path]},
+        )
+
+    @staticmethod
+    async def _make_download(tm, start_id: int, end_id: int):
+        return await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": start_id, "message_range_end": end_id},
+        )
+
+    @pytest.mark.asyncio
+    async def test_resident_running_task_does_not_block_new_tasks(self, db_path):
+        """常驻 RUNNING 清理任务不应阻塞一次性上传任务启动。
+
+        根因 bug：max_concurrent_tasks=1 且唯一槽位被常驻 cleanup_files 占用时，
+        新上传任务永久 QUEUED。修复后常驻任务不计入并发计数。
+        """
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(max_concurrent_tasks=1)
+        # 模拟重启后从 DB 恢复的常驻清理任务（保持 running）
+        cleanup = Task(
+            task_id="cleanup_resident",
+            task_type=TaskType.CLEANUP_FILES,
+            chat_id=-1,
+            status=TaskStatus.RUNNING,
+            created_at=datetime.now(UTC),
+        )
+        tm._tasks[cleanup.task_id] = cleanup
+        await tm._save_task(cleanup)
+
+        upload = await self._make_upload(tm, "/tmp/test.mp4")
+        started = await tm.start_task(upload.task_id)
+
+        assert started is True
+        assert upload.status == TaskStatus.RUNNING
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_max_tasks_by_type_limits_upload(self, db_path):
+        """max_upload_tasks=2 时第 3 个上传任务应排队。"""
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(
+            max_concurrent_tasks=8,
+            max_download_tasks=4,
+            max_upload_tasks=2,
+        )
+        t1 = await self._make_upload(tm, "/tmp/1.mp4")
+        t2 = await self._make_upload(tm, "/tmp/2.mp4")
+        t3 = await self._make_upload(tm, "/tmp/3.mp4")
+
+        await tm.start_task(t1.task_id)
+        await tm.start_task(t2.task_id)
+        assert t1.status == TaskStatus.RUNNING
+        assert t2.status == TaskStatus.RUNNING
+
+        await tm.start_task(t3.task_id)
+        assert t3.status == TaskStatus.QUEUED
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_max_tasks_by_type_independent_between_types(self, db_path):
+        """上传并发已满时，下载任务不应因此排队（类型间互不阻塞）。"""
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(
+            max_concurrent_tasks=8,
+            max_download_tasks=4,
+            max_upload_tasks=2,
+        )
+        up1 = await self._make_upload(tm, "/tmp/1.mp4")
+        up2 = await self._make_upload(tm, "/tmp/2.mp4")
+        await tm.start_task(up1.task_id)
+        await tm.start_task(up2.task_id)
+        assert up1.status == TaskStatus.RUNNING
+        assert up2.status == TaskStatus.RUNNING
+
+        # upload 已满，download 应直接 RUNNING
+        dl = await self._make_download(tm, 1, 10)
+        await tm.start_task(dl.task_id)
+        assert dl.status == TaskStatus.RUNNING
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_no_type_limits_falls_back_to_global(self, db_path):
+        """未配置类型限制时回退全局闸（防止旧行为回归）。
+
+        max_concurrent_tasks=2 且 3 个 DOWNLOAD：第 3 个应排队。
+        """
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(max_concurrent_tasks=2)  # 不传 max_download/upload_tasks
+        t1 = await self._make_download(tm, 1, 10)
+        t2 = await self._make_download(tm, 11, 20)
+        t3 = await self._make_download(tm, 21, 30)
+
+        await tm.start_task(t1.task_id)
+        await tm.start_task(t2.task_id)
+        await tm.start_task(t3.task_id)
+        assert t1.status == TaskStatus.RUNNING
+        assert t2.status == TaskStatus.RUNNING
+        assert t3.status == TaskStatus.QUEUED
+        await db.close_db()
+
+    @pytest.mark.asyncio
+    async def test_process_queue_resumes_by_type_when_slot_frees(self, db_path):
+        """上传槽位释放后 _process_queue 应按队头类型取出排队的上传任务。"""
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm = TaskManager(
+            max_concurrent_tasks=8,
+            max_download_tasks=4,
+            max_upload_tasks=1,
+        )
+        executor = FakeExecutor()
+        tm.set_executor(executor)
+
+        up1 = await self._make_upload(tm, "/tmp/1.mp4")
+        dl1 = await self._make_download(tm, 1, 10)
+        up2 = await self._make_upload(tm, "/tmp/2.mp4")  # upload 槽位已满 → 排队
+
+        await tm.start_task(up1.task_id)  # RUNNING (upload 1/1)
+        await tm.start_task(dl1.task_id)  # RUNNING (download, 类型不同不受限)
+        await tm.start_task(up2.task_id)  # QUEUED (upload 满)
+        assert up2.status == TaskStatus.QUEUED
+        assert up2.task_id not in executor.submitted
+
+        # 释放 upload 槽位 → _process_queue 应按队头类型启动 up2
+        await tm.complete_task(up1.task_id)
+        assert up2.status == TaskStatus.RUNNING
+        assert up2.task_id in executor.submitted
+        await db.close_db()
+
+
+# ============================================================
+# 测试：任务终态通知（TaskNotifier 挂载）
+# ============================================================
+
+
+class TestTaskNotification:
+    """任务终态通知契约：complete/fail 触发、cancel 不触发、未注入不报错。"""
+
+    @staticmethod
+    async def _make_running_task(task_manager):
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(task.task_id)
+        return task
+
+    @pytest.mark.asyncio
+    async def test_complete_triggers_notify_completed(self, task_manager):
+        """任务完成应触发完成通知，不触发错误通知。"""
+        notifier = AsyncMock()
+        task_manager.set_notifier(notifier)
+        task = await self._make_running_task(task_manager)
+        await task_manager.complete_task(task.task_id)
+        await asyncio.sleep(0.01)
+        notifier.notify_completed.assert_awaited_once()
+        notifier.notify_failed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fail_triggers_notify_failed(self, task_manager):
+        """任务失败应触发错误通知，不触发完成通知。"""
+        notifier = AsyncMock()
+        task_manager.set_notifier(notifier)
+        task = await self._make_running_task(task_manager)
+        await task_manager.fail_task(task.task_id, reason="测试失败")
+        await asyncio.sleep(0.01)
+        notifier.notify_failed.assert_awaited_once()
+        notifier.notify_completed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cancel_does_not_notify(self, task_manager):
+        """用户取消任务不触发任何通知。"""
+        notifier = AsyncMock()
+        task_manager.set_notifier(notifier)
+        task = await self._make_running_task(task_manager)
+        await task_manager.cancel_task(task.task_id)
+        await asyncio.sleep(0.01)
+        notifier.notify_completed.assert_not_awaited()
+        notifier.notify_failed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_without_notifier_completes_normally(self, task_manager):
+        """未注入 notifier 时，任务完成/失败流程不受影响。"""
+        task = await self._make_running_task(task_manager)
+        await task_manager.complete_task(task.task_id)
+        assert task.status == TaskStatus.COMPLETED
+        task2 = await self._make_running_task(task_manager)
+        await task_manager.fail_task(task2.task_id, reason="x")
+        assert task2.status == TaskStatus.FAILED

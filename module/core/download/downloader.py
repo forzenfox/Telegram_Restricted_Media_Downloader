@@ -2897,6 +2897,22 @@ class TelegramRestrictedMediaDownloader(Bot):
                         downloader=self,
                         uploader=getattr(self, "uploader", None),
                     )
+                    # 注入任务终态通知器（完成/错误通知 → 唯一授权用户）。
+                    # 通知依赖 bot 客户端与 root（授权用户 id），未启动 bot 时不注入。
+                    try:
+                        from module.core.task.notifier import TaskNotifier
+
+                        task_notifier = TaskNotifier(
+                            client=self.bot.bot,
+                            root_ids=self.bot.root,
+                            config_manager=_ctx.config_manager,
+                        )
+                        _ctx.task_manager.set_notifier(task_notifier)
+                        log.info("任务终态通知器已注入（完成/错误通知）")
+                    except Exception as _notify_err:
+                        log.warning(
+                            f"任务终态通知器注入失败（非致命，通知功能不可用）: {_notify_err}"
+                        )
                 if (
                     self.app.config.get("preference", {})
                     .get("upload", {})

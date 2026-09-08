@@ -211,6 +211,9 @@ class ConfigManager {
         password: this.config.proxy_password,
       },
       upload_max_group_size: parseInt(this.config.media_group_size) || 10,
+      // 通知配置：勾选即发送布尔真值，后端合并到 preference 区块
+      notification_enabled: this.config.notification_enabled === true || this.config.notification_enabled === 'true',
+      error_notification_enabled: this.config.error_notification_enabled === true || this.config.error_notification_enabled === 'true',
     };
   }
 
@@ -262,6 +265,12 @@ class ConfigManager {
       flattened.task_size_max_gb = config.resource_limits.task_size_max_gb || 10;
       flattened.min_disk_space_gb = config.resource_limits.min_disk_space_gb || 2;
     }
+
+    // 通知配置：后端在顶层返回（持久化于 config.yaml 的 preference 区块）
+    flattened.notification_enabled =
+      config.notification_enabled === true || config.notification_enabled === 'true';
+    flattened.error_notification_enabled =
+      config.error_notification_enabled === true || config.error_notification_enabled === 'true';
 
     return flattened;
   }

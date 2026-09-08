@@ -1,8 +1,6 @@
 # coding=UTF-8
 """配置相关 Pydantic 数据模型。"""
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -23,37 +21,43 @@ class ProxyConfig(BaseModel):
     """代理配置。"""
 
     enable_proxy: bool = False
-    scheme: Optional[str] = None
-    hostname: Optional[str] = None
-    port: Optional[int] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
+    scheme: str | None = None
+    hostname: str | None = None
+    port: int | None = None
+    username: str | None = None
+    password: str | None = None
 
 
 class ConfigOut(BaseModel):
     """配置响应数据。"""
 
-    api_id: Optional[str] = None
-    api_hash: Optional[str] = None
-    bot_token: Optional[str] = None
+    api_id: str | None = None
+    api_hash: str | None = None
+    bot_token: str | None = None
     resource_limits: ResourceLimits = Field(default_factory=ResourceLimits)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     download_type: list[str] = Field(default_factory=lambda: ["video", "photo"])
     max_retry_count: int = 3
-    save_directory: Optional[str] = None
-    temp_directory: Optional[str] = None
+    save_directory: str | None = None
+    temp_directory: str | None = None
     upload_delete_after: bool = False
     upload_max_group_size: int = 10
+    # 通知配置（持久化于 config.yaml 的 preference 区块）
+    notification_enabled: bool = False
+    error_notification_enabled: bool = False
 
 
 class ConfigUpdate(BaseModel):
     """配置更新请求体。"""
 
-    resource_limits: Optional[ResourceLimits] = None
-    proxy: Optional[ProxyConfig] = None
-    download_type: Optional[list[str]] = None
-    max_retry_count: Optional[int] = None
-    save_directory: Optional[str] = None
-    temp_directory: Optional[str] = None
-    upload_delete_after: Optional[bool] = None
-    upload_max_group_size: Optional[int] = None
+    resource_limits: ResourceLimits | None = None
+    proxy: ProxyConfig | None = None
+    download_type: list[str] | None = None
+    max_retry_count: int | None = None
+    save_directory: str | None = None
+    temp_directory: str | None = None
+    upload_delete_after: bool | None = None
+    upload_max_group_size: int | None = None
+    # 通知配置（持久化于 config.yaml 的 preference 区块）
+    notification_enabled: bool | None = None
+    error_notification_enabled: bool | None = None
